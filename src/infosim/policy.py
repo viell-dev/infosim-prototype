@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 from .actions import send_supplies, suppress_unrest, transfer_garrison
 from .orders import Order, OrderKind
+from .personnel import appoint, dismiss, pick_replacement
 
 if TYPE_CHECKING:
     from .actors import Actor
@@ -18,7 +19,44 @@ GOV_AUTONOMOUS_UNREST = 75.0     # governor acts alone above this
 CMD_LOW_FOOD = 500.0             # commander sends urgent food cry below this
 CMD_LOW_GARRISON = 600.0         # commander screams for reinforcement
 SUPPRESS_DURATION = 12
+SKIM_LOYALTY_THRESHOLD = 0.4
+SKIM_AMBITION_THRESHOLD = 0.5
+SKIM_FOOD_PER_CYCLE = 60.0
+KING_STRIKES_TO_DISMISS = 3      # consecutive bad reviews before sacking
+KING_REVIEW_UNREST = 60.0        # believed unrest above this counts as a strike
+KING_REVIEW_GARRISON = 800.0     # believed garrison below this counts as a strike
 # -----------------------------------------------------------------------------
+
+
+def _maybe_skim(sim: "Simulation", actor: "Actor") -> None:
+    """A disloyal, ambitious actor quietly extracts food from their own region.
+
+    The region's true food drops. The actor's belief is NOT updated to match —
+    so their next observation tick will surface the loss honestly, but if they
+    forge their reports it never leaves the region. This creates the corruption
+    cascade the blueprint asks for.
+    """
+    if actor.traits.loyalty >= SKIM_LOYALTY_THRESHOLD:
+        return
+    if actor.traits.ambition < SKIM_AMBITION_THRESHOLD:
+        return
+    region = sim.world.regions.get(actor.region)
+    if region is None:
+        return
+    available = region.state.get("food_stores", 0.0)
+    take = min(available, SKIM_FOOD_PER_CYCLE)
+    if take <= 0:
+        return
+    region.state["food_stores"] = available - take
+    sim.event_log.emit(
+        sim.tick,
+        "skim",
+        f"[{actor.region}] {actor.title} {actor.display_name} skims {take:.0f} food "
+        f"(stores {available:.0f} → {region.state['food_stores']:.0f})",
+        actor=actor.id,
+        region=actor.region,
+        amount=take,
+    )
 
 
 def _dispatch_order(
@@ -93,6 +131,9 @@ def decide_king(sim: "Simulation", actor: "Actor") -> None:
             _maybe_suppress(sim, actor, sub, deeper.region)
             _maybe_send_supplies(sim, actor, sub, deeper.region)
 
+        # Performance review — strikes against this sub for regions in their span.
+        _review_subordinate(sim, actor, sub)
+
 
 def _maybe_reinforce(sim: "Simulation", king: "Actor", routed_via: "Actor", target_region: str) -> None:
     belief = king.known.get(sim.subject_for(target_region, "garrison_strength"))
@@ -120,9 +161,82 @@ def _maybe_send_supplies(sim: "Simulation", king: "Actor", routed_via: "Actor", 
                     magnitude=magnitude, priority=1)
 
 
+def _review_subordinate(sim: "Simulation", king: "Actor", sub: "Actor") -> None:
+    """Increment or clear a strike against this subordinate based on King's belief
+    of all regions in the sub's chain of command. After enough strikes, dismiss
+    and replace from the candidate pool.
+    """
+    regions = [sub.region] + [s.region for s in _subordinates(sim, sub)]
+    bad_now = False
+    for r in regions:
+        unrest = king.known.get(sim.subject_for(r, "unrest"))
+        if unrest and unrest.value > KING_REVIEW_UNREST:
+            bad_now = True
+        garrison = king.known.get(sim.subject_for(r, "garrison_strength"))
+        if garrison and garrison.value < KING_REVIEW_GARRISON:
+            bad_now = True
+
+    prev = king.strikes.get(sub.id, 0)
+    new = prev + 1 if bad_now else 0
+    king.strikes[sub.id] = new
+    if new == 0 and prev > 0:
+        sim.event_log.emit(
+            sim.tick,
+            "review_cleared",
+            f"[{king.region}] {king.title} considers {sub.title} {sub.display_name} "
+            f"redeemed (strikes reset)",
+            actor=king.id,
+            subordinate=sub.id,
+        )
+    elif new >= KING_STRIKES_TO_DISMISS:
+        _dismiss_and_replace(sim, king, sub)
+
+
+def _dismiss_and_replace(sim: "Simulation", king: "Actor", sub: "Actor") -> None:
+    """Sack `sub` and appoint a replacement chosen by the King's trait profile."""
+    region = sub.region
+    title = sub.title
+    reports_to = sub.reports_to
+    report_every = sub.report_every
+    observe_every = sub.observe_every
+    decide_every = sub.decide_every
+    deeper_subs = _subordinates(sim, sub)
+
+    dismiss(sim, sub.id, reason=f"{KING_STRIKES_TO_DISMISS} consecutive bad reviews")
+    king.strikes.pop(sub.id, None)
+
+    candidate = pick_replacement(sim.candidate_pool, sim.used_candidates, king.traits)
+    if candidate is None:
+        sim.event_log.emit(
+            sim.tick,
+            "appointment_failed",
+            f"[{king.region}] no candidates available to replace {title} of {region}",
+            actor=king.id,
+            region=region,
+        )
+        return
+    sim.used_candidates.add(candidate.id)
+    new_actor = appoint(
+        sim,
+        new_id=candidate.id,
+        display_name=candidate.display_name,
+        title=title,
+        region=region,
+        reports_to=reports_to,
+        traits=candidate.traits,
+        report_every=report_every,
+        observe_every=observe_every,
+        decide_every=decide_every,
+    )
+    # rewire any subordinates of the dismissed actor to point at the new one
+    for deeper in deeper_subs:
+        deeper.reports_to = new_actor.id
+
+
 # --- governor -----------------------------------------------------------------
 def decide_governor(sim: "Simulation", actor: "Actor") -> None:
     """Governor: process inbox, possibly forward to commander, possibly act autonomously."""
+    _maybe_skim(sim, actor)
     subs = _subordinates(sim, actor)
     cmd = subs[0] if subs else None
 
@@ -189,6 +303,7 @@ def decide_governor(sim: "Simulation", actor: "Actor") -> None:
 # --- commander ----------------------------------------------------------------
 def decide_commander(sim: "Simulation", actor: "Actor") -> None:
     """Commander: execute orders; autonomously raise the alarm on critical lows."""
+    _maybe_skim(sim, actor)
     # 1. process inbox
     while actor.inbox:
         order = actor.inbox.pop(0)

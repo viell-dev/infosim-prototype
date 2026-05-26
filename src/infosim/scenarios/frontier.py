@@ -8,6 +8,7 @@ from pathlib import Path
 from ..actors import Actor, Traits
 from ..logging_setup import EventLog
 from ..messages import MessageBus
+from ..personnel import Candidate
 from ..sim import Simulation
 from ..world import Region, World
 
@@ -60,20 +61,49 @@ def build() -> tuple[World, dict[str, Actor]]:
         decide_every=10,
     ))
 
-    # Frontier commander: competent observer but frightened of looking weak.
+    # Frontier commander: competent observer but with loyalty issues and
+    # serious ambition — the disloyalty engine of this scenario. Below the
+    # forgery and skim thresholds.
     add(Actor(
         id="cmd_aldric",
         display_name="Aldric Vale",
         title="Commander",
         region="Frontier",
         reports_to="gov_mira",
-        traits=Traits(competence=0.8, honesty=0.7, fear=0.6, education=0.5),
+        traits=Traits(
+            competence=0.8, honesty=0.5, loyalty=0.25, ambition=0.8,
+            fear=0.6, education=0.5,
+        ),
         report_every=8,
         observe_every=4,
         decide_every=8,
     ))
 
     return world, actors
+
+
+def candidate_pool() -> list[Candidate]:
+    """Three reserve appointees with deliberately divergent profiles."""
+    return [
+        Candidate(
+            id="cand_brennar",
+            display_name="Brennar Holt",
+            traits=Traits(competence=0.55, honesty=0.85, loyalty=0.9,
+                          ambition=0.3, fear=0.3, education=0.6),
+        ),
+        Candidate(
+            id="cand_iselle",
+            display_name="Iselle Marn",
+            traits=Traits(competence=0.9, honesty=0.7, loyalty=0.5,
+                          ambition=0.6, fear=0.2, education=0.8),
+        ),
+        Candidate(
+            id="cand_terrick",
+            display_name="Terrick of Wynn",
+            traits=Traits(competence=0.7, honesty=0.75, loyalty=0.7,
+                          ambition=0.4, fear=0.3, education=0.8),
+        ),
+    ]
 
 
 def _bump(sim: Simulation, region: str, var: str, delta: float, cause: str) -> None:
@@ -112,7 +142,10 @@ def run(seed: int, ticks: int, runs_dir: Path) -> Path:
     log = EventLog(jsonl_path=base.with_suffix(".jsonl"), human_path=base.with_suffix(".log"))
     log.open()
 
-    sim = Simulation(world=world, actors=actors, bus=bus, rng=rng, event_log=log)
+    sim = Simulation(
+        world=world, actors=actors, bus=bus, rng=rng, event_log=log,
+        candidate_pool=candidate_pool(),
+    )
     scripted_events(sim)
     try:
         sim.run(total_ticks=ticks)

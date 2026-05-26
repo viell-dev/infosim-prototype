@@ -23,6 +23,24 @@ def _variable_of(subject: str) -> str:
     return subject.split(".", 1)[1]
 
 
+def forge_value(true_belief: float, variable: str, severity: float) -> float:
+    """Replace a report value with a politically convenient lie.
+
+    severity (0..1) scales how far the forged value moves from the actor's
+    actual belief toward an "everything is fine" target. severity=1.0 means
+    fully fabricated; severity=0.5 means a heavy lean.
+    """
+    from .world import VARIABLES
+    polarity = VARIABLES[variable].polarity
+    # "Fine" target: for positive polarity (garrison/food) push value high;
+    # for negative polarity (unrest) push value low.
+    if polarity == +1:
+        target = max(true_belief, 1.0) * 2.5  # implausibly rosy
+    else:
+        target = 0.0
+    return true_belief + (target - true_belief) * severity
+
+
 def observe(actor: Actor, subject: str, true_value: float, rng: random.Random) -> Report:
     """Generate a fresh local observation. Competence-noise only — no fear/corruption here.
 

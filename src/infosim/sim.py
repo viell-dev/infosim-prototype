@@ -9,9 +9,13 @@ from .actions import ActionInFlight
 from .actors import Actor
 from .logging_setup import EventLog
 from .messages import MessageBus, MessageKind
+from .personnel import Candidate
 from .policy import run_policy
-from .reports import Report, observe, relay
-from .world import World
+from .reports import Report, forge_value, observe, relay
+from .world import VARIABLES, World
+
+
+FORGERY_THRESHOLD = 0.4  # loyalty below this triggers possible forgery
 
 
 # A scripted event mutates the world at a given tick. Logged via the event_log.
@@ -27,6 +31,8 @@ class Simulation:
     event_log: EventLog
     schedule: dict[int, list[ScriptedEvent]] = field(default_factory=dict)
     actions_in_flight: list[ActionInFlight] = field(default_factory=list)
+    candidate_pool: list[Candidate] = field(default_factory=list)
+    used_candidates: set[str] = field(default_factory=set)
     _order_ids: Iterator[int] = field(default_factory=lambda: itertools.count(1))
     tick: int = 0
 
@@ -102,10 +108,35 @@ class Simulation:
             travel = self.world.travel_ticks(actor.region, recipient.region)
             for subject in sorted(actor.known.keys()):
                 belief = actor.known[subject]
+                outgoing_value = belief.value
+                forged = False
+                if actor.traits.loyalty < FORGERY_THRESHOLD:
+                    variable = subject.split(".", 1)[1]
+                    polarity = VARIABLES[variable].polarity
+                    # Only forge when the truth is bad news worth hiding.
+                    is_bad_news = (
+                        (polarity == +1 and belief.value < 1000.0) or
+                        (polarity == -1 and belief.value > 20.0)
+                    )
+                    if is_bad_news:
+                        severity = max(0.0, FORGERY_THRESHOLD - actor.traits.loyalty) / FORGERY_THRESHOLD
+                        outgoing_value = forge_value(belief.value, variable, severity)
+                        forged = True
+                        self.event_log.emit(
+                            t,
+                            "report_forged",
+                            f"[{actor.region}] {actor.title} {actor.display_name} forges "
+                            f"{subject}: true belief {belief.value:.0f} → reported {outgoing_value:.0f} "
+                            f"(loyalty {actor.traits.loyalty:.2f})",
+                            actor=actor.id,
+                            subject=subject,
+                            true_belief=belief.value,
+                            forged_value=outgoing_value,
+                        )
                 report = Report(
                     source_actor=actor.id,
                     subject=subject,
-                    estimated_value=belief.value,
+                    estimated_value=outgoing_value,
                     confidence=belief.confidence,
                     origin_tick=t,
                     source_chain=list(belief.source_chain) or [actor.id],
@@ -150,7 +181,18 @@ class Simulation:
                 )
                 continue
 
-            recipient = self.actors[msg.recipient_actor]
+            recipient = self.actors.get(msg.recipient_actor)
+            if recipient is None:
+                self.event_log.emit(
+                    t,
+                    "courier_undeliverable",
+                    f"courier #{msg.id} arrived at {msg.destination_region} but "
+                    f"recipient {msg.recipient_actor} no longer in office",
+                    message_id=msg.id,
+                    message_kind=msg.kind.value,
+                    intended_recipient=msg.recipient_actor,
+                )
+                continue
 
             if msg.kind == MessageKind.REPORT:
                 transformed = relay(recipient, msg.payload, self.rng)

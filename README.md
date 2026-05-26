@@ -6,10 +6,12 @@ separation produces interesting emergent narratives when read as logs. If readin
 like reading a believable little history of misinformation and delay, the concept is worth investing
 in. If not, it isn't.
 
-This repository currently implements **Milestone 1 (Information Sandbox)** and **Milestone 2
-(Hierarchical Decisions)**. Information flows up through delayed, biased reports; orders flow
-down through couriers; actions execute over time and feed consequences back into true state.
-No graphics yet — the human log is the product.
+This repository currently implements **Milestones 1–3** of the blueprint: Information Sandbox,
+Hierarchical Decisions, and Political Pressure. Information flows up through delayed and
+biased reports; orders flow down through couriers; actions execute over time and feed
+consequences back into true state; disloyal actors forge reports and skim resources; the
+King reviews subordinates and replaces them from a candidate pool. No graphics yet — the
+human log is the product.
 
 ---
 
@@ -79,6 +81,24 @@ distorts every variable in the *politically convenient* direction. Each tick:
 A final snapshot at the end of the run prints truth vs. the King's current belief per region,
 with the chain of actors the King's belief flowed through.
 
+**M3 adds politics:**
+
+- **Loyalty-driven forgery.** When an actor's `loyalty` is below `0.4` and the
+  variable they're about to report is bad news (low garrison/food or high
+  unrest), the outgoing report value is *replaced* with a politically convenient
+  lie before dispatch. The actor's own belief stays honest. Forgery severity
+  scales with disloyalty.
+- **Skimming.** A disloyal *and* ambitious actor (loyalty < 0.4, ambition ≥ 0.5)
+  quietly extracts food from their own region on every decide cycle. The region's
+  true food drops. If the same actor is also forging, the loss is hidden.
+- **Performance review and dismissal.** The King runs a review of each direct
+  subordinate every decide cycle. A region with believed unrest above 60 or
+  believed garrison below 800 earns a strike. Three consecutive strikes →
+  dismissal. A replacement is chosen from `Simulation.candidate_pool` using
+  scoring weights derived from the King's own traits: a scholar king (high
+  `education`) prioritises competence; a paranoid king (high `fear`)
+  prioritises loyalty.
+
 **M2 adds the downward half of the loop:**
 
 5. On a slower **decide cadence** each actor runs its policy (`src/infosim/policy.py`). The King
@@ -139,6 +159,60 @@ Append-only. Add notes as the design evolves.
   - Only one variable per region. Adding `food_stores` and `unrest` would let
     fear-bias direction differ per variable (low food = bad, suppress; high unrest
     = bad, suppress) and produce richer divergence patterns.
+
+### 2026-05-26 — M3 political pressure (Claude Opus 4.7 via Claude Code)
+
+The institutional failure modes the blueprint asks for now arise cleanly. The
+Commander in the seed=1 scenario is dialled to `loyalty=0.25`, `ambition=0.8`,
+which is enough to trigger both forgery and skimming from t=0.
+
+Seed=1 trace (300 ticks):
+
+- **t=0 onward**: Cmdr Aldric forges every Frontier report — food, garrison,
+  and unrest are all reported in the "everything fine" direction regardless of
+  belief. He simultaneously skims 60 food per decide cycle.
+- **By t=80**: Frontier food has been skimmed to zero. Aldric's belief honestly
+  says 0; his report says ~1. The King keeps issuing `SEND_SUPPLIES` from
+  Province on the assumption that a slow drain is in progress; the food arrives
+  and Aldric immediately resumes skimming it.
+- **t=220**: King's belief about Province has crossed his garrison/unrest
+  thresholds three decide cycles in a row (the SEND_SUPPLIES orders have drained
+  Province food, and earlier scripted shocks pushed Province metrics around).
+  Mira is dismissed for "3 consecutive bad reviews." Iselle Marn (competence
+  0.9, loyalty 0.5) is appointed. Her appointment is driven by the King's
+  high `education` weighting competence.
+- **Late run**: the institutional rot at Frontier is *worse*. Iselle is honest
+  and competent, so she relays Aldric's lies upward with minimal distortion —
+  i.e. the King now reads more accurate forgeries. Final snapshot:
+
+  | Region   | Variable           | Truth | King |  Δ    |
+  | -------- | ------------------ | ----- | ---- | ----- |
+  | Frontier | garrison_strength  | 800   | 1345 | +68%  |
+  | Frontier | food_stores        | 355   | 219  | −38%  |
+  | Frontier | unrest             | 0     | 15   |  +15  |
+  | Province | food_stores        | 0     | 0    |   0   |
+
+  The +68% garrison overestimate at Frontier dwarfs any divergence achievable
+  in M1 or M2. That is the "institutional failure" the milestone was for. And
+  it pairs with a *correctly* reported Province collapse (food=0 reported as
+  0 by the honest new governor), giving a clear contrast between the
+  reformed rung and the unreformed one.
+
+Things to watch / address before M4:
+
+- The King's review uses his *own belief* about each region. Aldric's forgeries
+  push Frontier belief above the strike thresholds, so the King paradoxically
+  thinks Frontier is going *well* — and rotates only Province where Mira is
+  honestly reporting a degrading situation. The most loyal-looking liar
+  survives; the honest middle manager is punished. That dynamic is dead-on
+  for the blueprint and worth keeping as-is.
+- The skim rate is fixed at 60 food/cycle. A trait-modulated rate would
+  give a smoother gradient between "petty corruption" and "looting the
+  province."
+- Forgery is currently applied at outgoing-report time only. Forged orders
+  (an actor altering an order before relaying it down) are a natural M4 topic.
+- The candidate pool is static and small. Lazy instantiation of historical
+  figures (blueprint §Lazy Instantiation) would scale this up cleanly.
 
 ### 2026-05-26 — M2 hierarchical decisions (Claude Opus 4.7 via Claude Code)
 
@@ -221,7 +295,9 @@ src/infosim/
   orders.py           # Order, OrderKind
   messages.py         # MessageBus + MessageKind (REPORT | ORDER)
   actions.py          # ActionInFlight + transfer_garrison / suppress_unrest / send_supplies
-  policy.py           # decide_king / decide_governor / decide_commander
+  personnel.py        # Candidate pool, appoint / dismiss / pick_replacement
+  policy.py           # decide_king (orders + reviews) / decide_governor / decide_commander
+                      # forgery, skimming, performance reviews live here
   sim.py              # Simulation tick loop (8 steps now fully wired)
   logging_setup.py    # JSONL + human dual-sink event log
   scenarios/
@@ -237,8 +313,10 @@ tests/
 
 ## Out of scope (deliberately)
 
-- Politics, loyalty consequences, appointments, forgery/interception → Milestone 3.
 - Any visual output → Milestone 4.
 - Multiple subordinates per superior, or hierarchy depth > 3.
-- Standing-directive data structure with priority resolution (M2 hardcodes thresholds
-  in policies).
+- Standing-directive data structure with priority resolution (thresholds remain hardcoded
+  in `policy.py`).
+- Forged *orders* (a subordinate altering a directive before relaying it down).
+- Interception of couriers by hostile actors.
+- Lazy instantiation of historical figures from a large population pool.

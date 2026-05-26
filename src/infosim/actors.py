@@ -43,6 +43,8 @@ class Actor:
     last_decide_tick: int = -10_000
     known: dict[str, BeliefRecord] = field(default_factory=dict)
     inbox: list["Order"] = field(default_factory=list)  # arrived orders awaiting decide()
+    tenure_start_tick: int = 0
+    strikes: dict[str, int] = field(default_factory=dict)  # superior's running grievance counters
 
     def update_belief(
         self,
