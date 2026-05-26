@@ -49,7 +49,7 @@ def _maybe_skim(sim: "Simulation", actor: "Actor") -> None:
         return
     region.state["food_stores"] = available - take
     sim.event_log.emit(
-        sim.tick,
+        sim.now,
         "skim",
         f"[{actor.region}] {actor.title} {actor.display_name} skims {take:.0f} food "
         f"(stores {available:.0f} → {region.state['food_stores']:.0f})",
@@ -77,8 +77,8 @@ def _dispatch_order(
         kind=kind,
         target_region=target_region,
         magnitude=magnitude,
-        issued_tick=sim.tick,
-        deadline_tick=sim.tick + deadline_offset,
+        issued_time=sim.now,
+        deadline_time=sim.now + deadline_offset,
         priority=priority,
     )
     msg = sim.bus.dispatch_order(
@@ -87,22 +87,22 @@ def _dispatch_order(
         origin_region=issuer.region,
         destination_region=recipient.region,
         base_travel_ticks=travel,
-        dispatch_tick=sim.tick,
+        dispatch_time=sim.now,
         payload=order,
     )
     sim.event_log.emit(
-        sim.tick,
+        sim.now,
         "order_dispatched",
         f"[{issuer.region}] {issuer.title} {issuer.display_name} orders "
         f"{recipient.title} {recipient.display_name}: "
-        f"{kind.value} {target_region} (magnitude {magnitude:.0f}, eta t={msg.eta_tick})",
+        f"{kind.value} {target_region} (magnitude {magnitude:.0f}, eta t={msg.eta_time:.0f})",
         order_id=order.id,
         issuer=issuer.id,
         recipient=recipient.id,
         order_kind=kind.value,
         target_region=target_region,
         magnitude=magnitude,
-        eta_tick=msg.eta_tick,
+        eta_time=msg.eta_time,
     )
 
 
@@ -181,7 +181,7 @@ def _review_subordinate(sim: "Simulation", king: "Actor", sub: "Actor") -> None:
     king.strikes[sub.id] = new
     if new == 0 and prev > 0:
         sim.event_log.emit(
-            sim.tick,
+            sim.now,
             "review_cleared",
             f"[{king.region}] {king.title} considers {sub.title} {sub.display_name} "
             f"redeemed (strikes reset)",
@@ -208,7 +208,7 @@ def _dismiss_and_replace(sim: "Simulation", king: "Actor", sub: "Actor") -> None
     candidate = pick_replacement(sim.candidate_pool, sim.used_candidates, king.traits)
     if candidate is None:
         sim.event_log.emit(
-            sim.tick,
+            sim.now,
             "appointment_failed",
             f"[{king.region}] no candidates available to replace {title} of {region}",
             actor=king.id,
@@ -244,7 +244,7 @@ def decide_governor(sim: "Simulation", actor: "Actor") -> None:
     while actor.inbox:
         order = actor.inbox.pop(0)
         sim.event_log.emit(
-            sim.tick,
+            sim.now,
             "order_received",
             f"[{actor.region}] {actor.title} {actor.display_name} acts on "
             f"{order.kind.value} {order.target_region} from {order.issuer}",
@@ -256,11 +256,9 @@ def decide_governor(sim: "Simulation", actor: "Actor") -> None:
 
         if order.kind == OrderKind.REINFORCE and order.target_region != actor.region:
             # send troops from our region toward the frontier
-            action = transfer_garrison(
+            transfer_garrison(
                 sim, actor.id, actor.region, order.target_region, order.magnitude,
             )
-            if action is not None:
-                sim.actions_in_flight.append(action)
         elif order.kind == OrderKind.SUPPRESS_UNREST:
             if cmd is not None and order.target_region == cmd.region:
                 # delegate to the commander
@@ -270,34 +268,30 @@ def decide_governor(sim: "Simulation", actor: "Actor") -> None:
                 )
             elif order.target_region == actor.region:
                 # governor handles their own region
-                action = suppress_unrest(
+                suppress_unrest(
                     sim, actor.id, actor.region, SUPPRESS_DURATION,
                     competence=actor.traits.competence, rng=sim.rng,
                 )
-                sim.actions_in_flight.append(action)
         elif order.kind == OrderKind.SEND_SUPPLIES and order.target_region != actor.region:
-            action = send_supplies(
+            send_supplies(
                 sim, actor.id, actor.region, order.target_region, order.magnitude,
             )
-            if action is not None:
-                sim.actions_in_flight.append(action)
 
     # 2. autonomous suppression if local unrest belief is severe
     own_unrest = actor.known.get(sim.subject_for(actor.region, "unrest"))
     if own_unrest and own_unrest.value > GOV_AUTONOMOUS_UNREST:
         sim.event_log.emit(
-            sim.tick,
+            sim.now,
             "autonomous_action",
             f"[{actor.region}] {actor.title} {actor.display_name} acts on own initiative: "
             f"suppress unrest (believed {own_unrest.value:.0f})",
             actor=actor.id,
             region=actor.region,
         )
-        action = suppress_unrest(
+        suppress_unrest(
             sim, actor.id, actor.region, SUPPRESS_DURATION,
             competence=actor.traits.competence, rng=sim.rng,
         )
-        sim.actions_in_flight.append(action)
 
 
 # --- commander ----------------------------------------------------------------
@@ -308,7 +302,7 @@ def decide_commander(sim: "Simulation", actor: "Actor") -> None:
     while actor.inbox:
         order = actor.inbox.pop(0)
         sim.event_log.emit(
-            sim.tick,
+            sim.now,
             "order_received",
             f"[{actor.region}] {actor.title} {actor.display_name} acts on "
             f"{order.kind.value} {order.target_region} from {order.issuer}",
@@ -318,11 +312,10 @@ def decide_commander(sim: "Simulation", actor: "Actor") -> None:
             target_region=order.target_region,
         )
         if order.kind == OrderKind.SUPPRESS_UNREST and order.target_region == actor.region:
-            action = suppress_unrest(
+            suppress_unrest(
                 sim, actor.id, actor.region, SUPPRESS_DURATION,
                 competence=actor.traits.competence, rng=sim.rng,
             )
-            sim.actions_in_flight.append(action)
         # REINFORCE / SEND_SUPPLIES targeted at the commander's region are handled by
         # the governor (the one with the source region's resources); the commander has
         # nothing to do but wait.
@@ -360,7 +353,7 @@ def _emit_urgent_report(
         estimated_value=value,
         confidence=confidence,
         urgency=1.0,
-        origin_tick=sim.tick,
+        origin_time=sim.now,
         source_chain=[actor.id],
     )
     travel = sim.world.travel_ticks(actor.region, superior.region)
@@ -370,19 +363,19 @@ def _emit_urgent_report(
         origin_region=actor.region,
         destination_region=superior.region,
         base_travel_ticks=travel,
-        dispatch_tick=sim.tick,
+        dispatch_time=sim.now,
         payload=report,
     )
     sim.event_log.emit(
-        sim.tick,
+        sim.now,
         "urgent_report",
         f"[{actor.region}] {actor.title} {actor.display_name} sends URGENT report to "
-        f"{superior.region}: {variable} ≈ {value:.0f} (eta t={msg.eta_tick})",
+        f"{superior.region}: {variable} ≈ {value:.0f} (eta t={msg.eta_time:.0f})",
         sender=actor.id,
         recipient=superior.id,
         subject=subject,
         value=value,
-        eta_tick=msg.eta_tick,
+        eta_time=msg.eta_time,
     )
 
 

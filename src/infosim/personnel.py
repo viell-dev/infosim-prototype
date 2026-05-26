@@ -25,11 +25,11 @@ def appoint(
     region: str,
     reports_to: str | None,
     traits: Traits,
-    report_every: int,
-    observe_every: int,
-    decide_every: int,
+    report_every: float,
+    observe_every: float,
+    decide_every: float,
 ) -> Actor:
-    """Create a new actor and wire them into the hierarchy."""
+    """Create a new actor, wire them into the hierarchy, and put them on the schedule."""
     actor = Actor(
         id=new_id,
         display_name=display_name,
@@ -40,11 +40,12 @@ def appoint(
         report_every=report_every,
         observe_every=observe_every,
         decide_every=decide_every,
-        tenure_start_tick=sim.tick,
+        tenure_start_time=sim.now,
     )
     sim.actors[new_id] = actor
+    sim.schedule_actor_cadences(actor)
     sim.event_log.emit(
-        sim.tick,
+        sim.now,
         "appointed",
         f"[{region}] {title} {display_name} takes office "
         f"(competence {traits.competence:.2f}, honesty {traits.honesty:.2f}, "
@@ -69,13 +70,13 @@ def dismiss(sim: "Simulation", actor_id: str, reason: str) -> Actor | None:
     if actor is None:
         return None
     sim.event_log.emit(
-        sim.tick,
+        sim.now,
         "dismissed",
         f"[{actor.region}] {actor.title} {actor.display_name} dismissed: {reason}",
         actor=actor_id,
         region=actor.region,
         reason=reason,
-        tenure_ticks=sim.tick - actor.tenure_start_tick,
+        tenure_time=sim.now - actor.tenure_start_time,
     )
     # Wipe any belief the King held that came through this person — institutional
     # memory dies with the office holder. Beliefs whose source_chain ends with the

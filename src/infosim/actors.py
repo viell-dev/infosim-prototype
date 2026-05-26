@@ -11,8 +11,8 @@ if TYPE_CHECKING:
 class Traits:
     competence: float = 0.7   # 0..1, higher = more accurate observations
     honesty: float = 0.8      # 0..1, lower = deliberate distortion
-    loyalty: float = 0.8      # 0..1, unused in M1 except as flavour
-    ambition: float = 0.3     # 0..1, currently unused (M3)
+    loyalty: float = 0.8      # 0..1, lower = forgery, skim, possible betrayal
+    ambition: float = 0.3     # 0..1, lower = passive; higher = corrupt initiative
     fear: float = 0.2         # 0..1, higher = suppress bad news
     education: float = 0.6    # 0..1, affects report quality
 
@@ -23,8 +23,8 @@ class BeliefRecord:
     subject: str                # e.g. "Frontier.garrison_strength"
     value: float
     confidence: float           # 0..1
-    last_updated_tick: int
-    source_chain: list[str] = field(default_factory=list)  # actor ids the report passed through
+    last_updated_time: float
+    source_chain: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -35,29 +35,28 @@ class Actor:
     region: str                 # the region they're physically in
     reports_to: str | None      # actor id of superior, or None
     traits: Traits = field(default_factory=Traits)
-    report_every: int = 10      # cadence in ticks for sending reports upward
-    observe_every: int = 5      # cadence in ticks for sampling the local true state
-    decide_every: int = 10      # cadence in ticks for running decision policy
-    last_report_tick: int = -10_000   # so first cadence fires soon
-    last_observe_tick: int = -10_000
-    last_decide_tick: int = -10_000
+    # Intervals between scheduled events of each kind. No state about
+    # "last fire time" — the scheduler is the source of truth.
+    report_every: float = 10.0
+    observe_every: float = 5.0
+    decide_every: float = 10.0
     known: dict[str, BeliefRecord] = field(default_factory=dict)
-    inbox: list["Order"] = field(default_factory=list)  # arrived orders awaiting decide()
-    tenure_start_tick: int = 0
-    strikes: dict[str, int] = field(default_factory=dict)  # superior's running grievance counters
+    inbox: list["Order"] = field(default_factory=list)
+    tenure_start_time: float = 0.0
+    strikes: dict[str, int] = field(default_factory=dict)
 
     def update_belief(
         self,
         subject: str,
         value: float,
         confidence: float,
-        tick: int,
+        now: float,
         source_chain: list[str],
     ) -> None:
         self.known[subject] = BeliefRecord(
             subject=subject,
             value=value,
             confidence=confidence,
-            last_updated_tick=tick,
+            last_updated_time=now,
             source_chain=source_chain,
         )

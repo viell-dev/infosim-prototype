@@ -18,6 +18,6 @@ class Order:
     kind: OrderKind
     target_region: str
     magnitude: float             # interpretation depends on kind (troop count, food amount, ...)
-    issued_tick: int
-    deadline_tick: int           # advisory; actors may still execute past it
+    issued_time: float
+    deadline_time: float         # advisory; actors may still execute past it
     priority: int = 1            # higher = more urgent

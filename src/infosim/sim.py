@@ -5,247 +5,328 @@ import random
 from dataclasses import dataclass, field
 from typing import Callable, Iterator
 
-from .actions import ActionInFlight
 from .actors import Actor
 from .logging_setup import EventLog
-from .messages import MessageBus, MessageKind
+from .messages import Message, MessageBus, MessageKind
 from .personnel import Candidate
 from .policy import run_policy
 from .reports import Report, forge_value, observe, relay
+from .scheduler import Event, EventKind, Scheduler
 from .world import VARIABLES, World
 
 
 FORGERY_THRESHOLD = 0.4  # loyalty below this triggers possible forgery
 
-
-# A scripted event mutates the world at a given tick. Logged via the event_log.
-ScriptedEvent = Callable[["Simulation"], None]
+ScriptedFn = Callable[["Simulation"], None]
 
 
 @dataclass
 class Simulation:
+    """Discrete-event simulation engine.
+
+    There is no global tick. Time advances to the next scheduled event. Each
+    actor's cadences (observe_every / report_every / decide_every) are honoured
+    by handlers that re-schedule the next event of the same kind after firing.
+
+    Public API:
+      - sim.schedule_scripted(time, fn) — fire fn(sim) at the given logical time
+      - sim.run_until(stop_time)        — drain events up to (and including) stop_time
+      - sim.now                         — current logical time (float)
+    """
     world: World
     actors: dict[str, Actor]
-    bus: MessageBus
     rng: random.Random
     event_log: EventLog
-    schedule: dict[int, list[ScriptedEvent]] = field(default_factory=dict)
-    actions_in_flight: list[ActionInFlight] = field(default_factory=list)
+    scheduler: Scheduler = field(default_factory=Scheduler)
+    bus: MessageBus = field(init=False)
     candidate_pool: list[Candidate] = field(default_factory=list)
     used_candidates: set[str] = field(default_factory=set)
     _order_ids: Iterator[int] = field(default_factory=lambda: itertools.count(1))
-    tick: int = 0
+    _bootstrapped: bool = field(default=False, init=False)
+    # Bus tuning is captured at construction time so dataclass init stays
+    # ergonomic.
+    bus_loss_prob: float = 0.05
+    bus_jitter_frac: float = 0.2
 
-    # Subject naming convention
+    def __post_init__(self) -> None:
+        self.bus = MessageBus(
+            scheduler=self.scheduler,
+            rng=self.rng,
+            loss_prob=self.bus_loss_prob,
+            jitter_frac=self.bus_jitter_frac,
+        )
+
+    @property
+    def now(self) -> float:
+        return self.scheduler.now
+
     @staticmethod
     def subject_for(region: str, var: str) -> str:
         return f"{region}.{var}"
 
-    def schedule_event(self, tick: int, fn: ScriptedEvent) -> None:
-        self.schedule.setdefault(tick, []).append(fn)
+    # ---- public scheduling -----------------------------------------------
 
-    def actors_in(self, region: str) -> list[Actor]:
-        return [a for a in self.actors.values() if a.region == region]
+    def schedule_scripted(self, when: float, fn: ScriptedFn) -> None:
+        self.scheduler.schedule(when, Event(kind=EventKind.SCRIPTED, payload=fn))
 
-    def run(self, total_ticks: int) -> None:
-        for _ in range(total_ticks):
-            self._step()
-            self.tick += 1
+    # ---- bootstrap -------------------------------------------------------
 
-    def _step(self) -> None:
-        t = self.tick
+    def _bootstrap_actor_cadences(self) -> None:
+        """Schedule each actor's first OBSERVE / REPORT / DECIDE at time 0.
 
-        # 1. scripted true-state changes
-        for fn in self.schedule.get(t, []):
-            fn(self)
-
-        # 2. local observations — one observer per region (most-senior by id),
-        # firing only on the actor's observe cadence to keep logs scannable.
-        seen_regions: set[str] = set()
+        The 'first event fires immediately' behaviour is preserved from the
+        previous tick-based model.
+        """
         for actor in sorted(self.actors.values(), key=lambda a: a.id):
-            if actor.region in seen_regions:
-                continue
-            seen_regions.add(actor.region)
-            if t - actor.last_observe_tick < actor.observe_every:
-                continue
-            region = self.world.regions[actor.region]
-            for var, true_value in sorted(region.state.items()):
-                subject = self.subject_for(region.name, var)
-                report = observe(actor, subject, float(true_value), self.rng)
-                report.origin_tick = t
-                actor.update_belief(
-                    subject,
-                    report.estimated_value,
-                    report.confidence,
-                    t,
-                    report.source_chain,
-                )
-                self.event_log.emit(
-                    t,
-                    "observation",
-                    f"[{region.name}] {actor.title} {actor.display_name} observes "
-                    f"{var} ≈ {report.estimated_value:.0f} (true {true_value:.0f}, "
-                    f"conf {report.confidence:.2f})",
-                    actor=actor.id,
-                    region=region.name,
-                    subject=subject,
-                    estimated_value=report.estimated_value,
-                    true_value=true_value,
-                    confidence=report.confidence,
-                )
-            actor.last_observe_tick = t
+            self.scheduler.schedule(
+                self.now,
+                Event(kind=EventKind.OBSERVE, actor_id=actor.id),
+            )
+            self.scheduler.schedule(
+                self.now,
+                Event(kind=EventKind.REPORT, actor_id=actor.id),
+            )
+            self.scheduler.schedule(
+                self.now,
+                Event(kind=EventKind.DECIDE, actor_id=actor.id),
+            )
 
-        # 3 & 4. cadence-driven reports get sent upward — one courier carries
-        # everything this actor currently believes (own region + relayed beliefs).
-        for actor in sorted(self.actors.values(), key=lambda a: a.id):
-            if actor.reports_to is None:
-                continue
-            if t - actor.last_report_tick < actor.report_every:
-                continue
-            if not actor.known:
-                continue
-            recipient = self.actors[actor.reports_to]
-            travel = self.world.travel_ticks(actor.region, recipient.region)
-            for subject in sorted(actor.known.keys()):
-                belief = actor.known[subject]
-                outgoing_value = belief.value
-                forged = False
-                if actor.traits.loyalty < FORGERY_THRESHOLD:
-                    variable = subject.split(".", 1)[1]
-                    polarity = VARIABLES[variable].polarity
-                    # Only forge when the truth is bad news worth hiding.
-                    is_bad_news = (
-                        (polarity == +1 and belief.value < 1000.0) or
-                        (polarity == -1 and belief.value > 20.0)
-                    )
-                    if is_bad_news:
-                        severity = max(0.0, FORGERY_THRESHOLD - actor.traits.loyalty) / FORGERY_THRESHOLD
-                        outgoing_value = forge_value(belief.value, variable, severity)
-                        forged = True
-                        self.event_log.emit(
-                            t,
-                            "report_forged",
-                            f"[{actor.region}] {actor.title} {actor.display_name} forges "
-                            f"{subject}: true belief {belief.value:.0f} → reported {outgoing_value:.0f} "
-                            f"(loyalty {actor.traits.loyalty:.2f})",
-                            actor=actor.id,
-                            subject=subject,
-                            true_belief=belief.value,
-                            forged_value=outgoing_value,
-                        )
-                report = Report(
-                    source_actor=actor.id,
-                    subject=subject,
-                    estimated_value=outgoing_value,
-                    confidence=belief.confidence,
-                    origin_tick=t,
-                    source_chain=list(belief.source_chain) or [actor.id],
-                )
-                msg = self.bus.dispatch(
-                    sender_actor=actor.id,
-                    recipient_actor=recipient.id,
-                    origin_region=actor.region,
-                    destination_region=recipient.region,
-                    base_travel_ticks=travel,
-                    dispatch_tick=t,
-                    payload=report,
-                )
-                self.event_log.emit(
-                    t,
-                    "dispatch",
-                    f"[{actor.region}] {actor.title} {actor.display_name} dispatches "
-                    f"courier #{msg.id} → {recipient.region} "
-                    f"(eta t={msg.eta_tick}, subject={subject}, value≈{report.estimated_value:.0f})",
-                    message_id=msg.id,
-                    sender=actor.id,
-                    recipient=recipient.id,
-                    eta_tick=msg.eta_tick,
-                    subject=subject,
-                    value=report.estimated_value,
-                    confidence=report.confidence,
-                )
-            actor.last_report_tick = t
+    def schedule_actor_cadences(self, actor: Actor) -> None:
+        """Schedule a freshly-appointed actor's first events one cadence ahead.
 
-        # 5. deliver due messages — branch on kind
-        for msg in self.bus.deliver_due(t):
-            if msg.lost:
-                self.event_log.emit(
-                    t,
-                    "courier_lost",
-                    f"courier #{msg.id} ({msg.origin_region} → {msg.destination_region}) "
-                    f"never arrived",
-                    message_id=msg.id,
-                    message_kind=msg.kind.value,
-                    sender=msg.sender_actor,
-                    recipient=msg.recipient_actor,
-                )
-                continue
+        Called from personnel.appoint() so a new appointee enters the rotation
+        without firing instantly at their tenure start.
+        """
+        self.scheduler.schedule(
+            self.now + actor.observe_every,
+            Event(kind=EventKind.OBSERVE, actor_id=actor.id),
+        )
+        self.scheduler.schedule(
+            self.now + actor.report_every,
+            Event(kind=EventKind.REPORT, actor_id=actor.id),
+        )
+        self.scheduler.schedule(
+            self.now + actor.decide_every,
+            Event(kind=EventKind.DECIDE, actor_id=actor.id),
+        )
 
-            recipient = self.actors.get(msg.recipient_actor)
-            if recipient is None:
-                self.event_log.emit(
-                    t,
-                    "courier_undeliverable",
-                    f"courier #{msg.id} arrived at {msg.destination_region} but "
-                    f"recipient {msg.recipient_actor} no longer in office",
-                    message_id=msg.id,
-                    message_kind=msg.kind.value,
-                    intended_recipient=msg.recipient_actor,
-                )
-                continue
+    # ---- main loop -------------------------------------------------------
 
-            if msg.kind == MessageKind.REPORT:
-                transformed = relay(recipient, msg.payload, self.rng)
-                recipient.update_belief(
-                    transformed.subject,
-                    transformed.estimated_value,
-                    transformed.confidence,
-                    t,
-                    transformed.source_chain,
-                )
-                self.event_log.emit(
-                    t,
-                    "receive",
-                    f"[{recipient.region}] {recipient.title} {recipient.display_name} receives "
-                    f"courier #{msg.id} from {msg.sender_actor}: "
-                    f"{transformed.subject} ≈ {transformed.estimated_value:.0f} "
-                    f"(conf {transformed.confidence:.2f}, chain: {' → '.join(transformed.source_chain)})",
-                    message_id=msg.id,
-                    recipient=recipient.id,
-                    subject=transformed.subject,
-                    value=transformed.estimated_value,
-                    confidence=transformed.confidence,
-                    source_chain=transformed.source_chain,
-                )
-            else:  # ORDER
-                recipient.inbox.append(msg.payload)
-                self.event_log.emit(
-                    t,
-                    "order_delivered",
-                    f"[{recipient.region}] {recipient.title} {recipient.display_name} receives "
-                    f"order #{msg.payload.id} from {msg.sender_actor}: "
-                    f"{msg.payload.kind.value} {msg.payload.target_region} "
-                    f"(magnitude {msg.payload.magnitude:.0f})",
-                    message_id=msg.id,
-                    order_id=msg.payload.id,
-                    recipient=recipient.id,
-                    order_kind=msg.payload.kind.value,
-                    target_region=msg.payload.target_region,
-                    magnitude=msg.payload.magnitude,
-                )
+    def run_until(self, stop_time: float) -> None:
+        if not self._bootstrapped:
+            self._bootstrap_actor_cadences()
+            self._bootstrapped = True
 
-        # 7. decide — actors run their policies on cadence
-        for actor in sorted(self.actors.values(), key=lambda a: a.id):
-            if t - actor.last_decide_tick < actor.decide_every:
-                continue
+        while True:
+            peek = self.scheduler.peek_next_time()
+            if peek is None or peek > stop_time:
+                # advance now to stop_time so end-of-run logging reflects the
+                # caller's stop point even if no event fires there.
+                self.scheduler.now = stop_time
+                return
+            popped = self.scheduler.pop_next()
+            assert popped is not None
+            _when, event = popped
+            self._dispatch(event)
+
+    def _dispatch(self, event: Event) -> None:
+        if event.kind is EventKind.SCRIPTED:
+            event.payload(self)
+            return
+        if event.kind is EventKind.MESSAGE_ARRIVED:
+            self._handle_message(event.payload)
+            return
+        if event.kind is EventKind.ACTION_COMPLETE:
+            event.payload.effect_fn(self)
+            return
+
+        # Actor-keyed events (OBSERVE / REPORT / DECIDE). The actor may have
+        # been dismissed since this event was scheduled — silently drop.
+        actor = self.actors.get(event.actor_id) if event.actor_id else None
+        if actor is None:
+            return
+        if event.kind is EventKind.OBSERVE:
+            self._handle_observe(actor)
+            self.scheduler.schedule(
+                self.now + actor.observe_every,
+                Event(kind=EventKind.OBSERVE, actor_id=actor.id),
+            )
+        elif event.kind is EventKind.REPORT:
+            self._handle_report(actor)
+            self.scheduler.schedule(
+                self.now + actor.report_every,
+                Event(kind=EventKind.REPORT, actor_id=actor.id),
+            )
+        elif event.kind is EventKind.DECIDE:
             run_policy(self, actor)
-            actor.last_decide_tick = t
+            self.scheduler.schedule(
+                self.now + actor.decide_every,
+                Event(kind=EventKind.DECIDE, actor_id=actor.id),
+            )
 
-        # 8. resolve any actions whose completion tick is now
-        remaining: list[ActionInFlight] = []
-        for action in self.actions_in_flight:
-            if action.complete_tick <= t:
-                action.effect_fn(self)
-            else:
-                remaining.append(action)
-        self.actions_in_flight = remaining
+    # ---- handlers --------------------------------------------------------
+
+    def _handle_observe(self, actor: Actor) -> None:
+        region = self.world.regions[actor.region]
+        for var, true_value in sorted(region.state.items()):
+            subject = self.subject_for(region.name, var)
+            report = observe(actor, subject, float(true_value), self.rng)
+            report.origin_time = self.now
+            actor.update_belief(
+                subject,
+                report.estimated_value,
+                report.confidence,
+                self.now,
+                report.source_chain,
+            )
+            self.event_log.emit(
+                self.now,
+                "observation",
+                f"[{region.name}] {actor.title} {actor.display_name} observes "
+                f"{var} ≈ {report.estimated_value:.0f} (true {true_value:.0f}, "
+                f"conf {report.confidence:.2f})",
+                actor=actor.id,
+                region=region.name,
+                subject=subject,
+                estimated_value=report.estimated_value,
+                true_value=true_value,
+                confidence=report.confidence,
+            )
+
+    def _handle_report(self, actor: Actor) -> None:
+        if actor.reports_to is None:
+            return
+        if not actor.known:
+            return
+        recipient = self.actors.get(actor.reports_to)
+        if recipient is None:
+            return
+        travel = self.world.travel_ticks(actor.region, recipient.region)
+        for subject in sorted(actor.known.keys()):
+            belief = actor.known[subject]
+            outgoing_value = belief.value
+            forged = False
+            if actor.traits.loyalty < FORGERY_THRESHOLD:
+                variable = subject.split(".", 1)[1]
+                polarity = VARIABLES[variable].polarity
+                is_bad_news = (
+                    (polarity == +1 and belief.value < 1000.0) or
+                    (polarity == -1 and belief.value > 20.0)
+                )
+                if is_bad_news:
+                    severity = (
+                        max(0.0, FORGERY_THRESHOLD - actor.traits.loyalty) / FORGERY_THRESHOLD
+                    )
+                    outgoing_value = forge_value(belief.value, variable, severity)
+                    forged = True
+                    self.event_log.emit(
+                        self.now,
+                        "report_forged",
+                        f"[{actor.region}] {actor.title} {actor.display_name} forges "
+                        f"{subject}: true belief {belief.value:.0f} → "
+                        f"reported {outgoing_value:.0f} (loyalty {actor.traits.loyalty:.2f})",
+                        actor=actor.id,
+                        subject=subject,
+                        true_belief=belief.value,
+                        forged_value=outgoing_value,
+                    )
+            report = Report(
+                source_actor=actor.id,
+                subject=subject,
+                estimated_value=outgoing_value,
+                confidence=belief.confidence,
+                origin_time=self.now,
+                source_chain=list(belief.source_chain) or [actor.id],
+            )
+            msg = self.bus.dispatch(
+                sender_actor=actor.id,
+                recipient_actor=recipient.id,
+                origin_region=actor.region,
+                destination_region=recipient.region,
+                base_travel_ticks=travel,
+                dispatch_time=self.now,
+                payload=report,
+            )
+            self.event_log.emit(
+                self.now,
+                "dispatch",
+                f"[{actor.region}] {actor.title} {actor.display_name} dispatches "
+                f"courier #{msg.id} → {recipient.region} "
+                f"(eta t={msg.eta_time:.0f}, subject={subject}, "
+                f"value≈{report.estimated_value:.0f})",
+                message_id=msg.id,
+                sender=actor.id,
+                recipient=recipient.id,
+                eta_time=msg.eta_time,
+                subject=subject,
+                value=report.estimated_value,
+                confidence=report.confidence,
+                forged=forged,
+            )
+
+    def _handle_message(self, msg: Message) -> None:
+        if msg.lost:
+            self.event_log.emit(
+                self.now,
+                "courier_lost",
+                f"courier #{msg.id} ({msg.origin_region} → {msg.destination_region}) "
+                f"never arrived",
+                message_id=msg.id,
+                message_kind=msg.kind.value,
+                sender=msg.sender_actor,
+                recipient=msg.recipient_actor,
+            )
+            return
+        recipient = self.actors.get(msg.recipient_actor)
+        if recipient is None:
+            self.event_log.emit(
+                self.now,
+                "courier_undeliverable",
+                f"courier #{msg.id} arrived at {msg.destination_region} but "
+                f"recipient {msg.recipient_actor} no longer in office",
+                message_id=msg.id,
+                message_kind=msg.kind.value,
+                intended_recipient=msg.recipient_actor,
+            )
+            return
+
+        if msg.kind is MessageKind.REPORT:
+            transformed = relay(recipient, msg.payload, self.rng)
+            recipient.update_belief(
+                transformed.subject,
+                transformed.estimated_value,
+                transformed.confidence,
+                self.now,
+                transformed.source_chain,
+            )
+            self.event_log.emit(
+                self.now,
+                "receive",
+                f"[{recipient.region}] {recipient.title} {recipient.display_name} receives "
+                f"courier #{msg.id} from {msg.sender_actor}: "
+                f"{transformed.subject} ≈ {transformed.estimated_value:.0f} "
+                f"(conf {transformed.confidence:.2f}, "
+                f"chain: {' → '.join(transformed.source_chain)})",
+                message_id=msg.id,
+                recipient=recipient.id,
+                subject=transformed.subject,
+                value=transformed.estimated_value,
+                confidence=transformed.confidence,
+                source_chain=transformed.source_chain,
+            )
+        else:  # ORDER
+            recipient.inbox.append(msg.payload)
+            self.event_log.emit(
+                self.now,
+                "order_delivered",
+                f"[{recipient.region}] {recipient.title} {recipient.display_name} receives "
+                f"order #{msg.payload.id} from {msg.sender_actor}: "
+                f"{msg.payload.kind.value} {msg.payload.target_region} "
+                f"(magnitude {msg.payload.magnitude:.0f})",
+                message_id=msg.id,
+                order_id=msg.payload.id,
+                recipient=recipient.id,
+                order_kind=msg.payload.kind.value,
+                target_region=msg.payload.target_region,
+                magnitude=msg.payload.magnitude,
+            )

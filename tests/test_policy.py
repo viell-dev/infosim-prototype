@@ -5,9 +5,9 @@ from pathlib import Path
 
 from infosim.actors import Actor, BeliefRecord, Traits
 from infosim.logging_setup import EventLog
-from infosim.messages import MessageBus, MessageKind
-from infosim.orders import OrderKind
+from infosim.orders import Order, OrderKind
 from infosim.policy import decide_king
+from infosim.scheduler import EventKind
 from infosim.sim import Simulation
 from infosim.world import Region, World
 
@@ -34,56 +34,51 @@ def _mini_world() -> tuple[World, dict[str, Actor]]:
 def _sim(tmp_path: Path) -> Simulation:
     world, actors = _mini_world()
     rng = random.Random(0)
-    bus = MessageBus(rng=rng, loss_prob=0.0, jitter_frac=0.0)
     log = EventLog(jsonl_path=tmp_path / "x.jsonl", human_path=tmp_path / "x.log")
     log.open()
-    return Simulation(world=world, actors=actors, bus=bus, rng=rng, event_log=log)
+    return Simulation(
+        world=world, actors=actors, rng=rng, event_log=log,
+        bus_loss_prob=0.0, bus_jitter_frac=0.0,
+    )
 
 
-def _outbound_orders(sim: Simulation) -> list:
-    return [m for m in (q.message for q in sim.bus._heap)
-            if m.kind is MessageKind.ORDER]
+def _scheduled_orders(sim: Simulation) -> list[Order]:
+    return [
+        qe.event.payload.payload
+        for qe in sim.scheduler._heap
+        if qe.event.kind is EventKind.MESSAGE_ARRIVED
+        and isinstance(qe.event.payload.payload, Order)
+    ]
+
+
+def _belief(value: float) -> BeliefRecord:
+    return BeliefRecord(
+        subject="x", value=value, confidence=0.7,
+        last_updated_time=0.0, source_chain=["gov", "king"],
+    )
 
 
 def test_king_issues_reinforce_when_belief_low(tmp_path: Path) -> None:
     sim = _sim(tmp_path)
     king = sim.actors["king"]
-    king.known["Frontier.garrison_strength"] = BeliefRecord(
-        subject="Frontier.garrison_strength", value=400.0, confidence=0.7,
-        last_updated_tick=0, source_chain=["gov", "king"],
-    )
+    king.known["Frontier.garrison_strength"] = _belief(400.0)
     decide_king(sim, king)
-    orders = _outbound_orders(sim)
-    kinds = [o.payload.kind for o in orders]
-    assert OrderKind.REINFORCE in kinds
+    assert any(o.kind is OrderKind.REINFORCE for o in _scheduled_orders(sim))
 
 
 def test_king_silent_when_belief_healthy(tmp_path: Path) -> None:
     sim = _sim(tmp_path)
     king = sim.actors["king"]
-    king.known["Frontier.garrison_strength"] = BeliefRecord(
-        subject="Frontier.garrison_strength", value=1500.0, confidence=0.7,
-        last_updated_tick=0, source_chain=["gov", "king"],
-    )
-    king.known["Frontier.unrest"] = BeliefRecord(
-        subject="Frontier.unrest", value=10.0, confidence=0.7,
-        last_updated_tick=0, source_chain=["gov", "king"],
-    )
-    king.known["Frontier.food_stores"] = BeliefRecord(
-        subject="Frontier.food_stores", value=1500.0, confidence=0.7,
-        last_updated_tick=0, source_chain=["gov", "king"],
-    )
+    king.known["Frontier.garrison_strength"] = _belief(1500.0)
+    king.known["Frontier.unrest"] = _belief(10.0)
+    king.known["Frontier.food_stores"] = _belief(1500.0)
     decide_king(sim, king)
-    assert _outbound_orders(sim) == []
+    assert _scheduled_orders(sim) == []
 
 
 def test_king_orders_suppression_when_unrest_high(tmp_path: Path) -> None:
     sim = _sim(tmp_path)
     king = sim.actors["king"]
-    king.known["Frontier.unrest"] = BeliefRecord(
-        subject="Frontier.unrest", value=80.0, confidence=0.7,
-        last_updated_tick=0, source_chain=["gov", "king"],
-    )
+    king.known["Frontier.unrest"] = _belief(80.0)
     decide_king(sim, king)
-    orders = _outbound_orders(sim)
-    assert any(o.payload.kind is OrderKind.SUPPRESS_UNREST for o in orders)
+    assert any(o.kind is OrderKind.SUPPRESS_UNREST for o in _scheduled_orders(sim))

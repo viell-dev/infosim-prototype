@@ -7,7 +7,6 @@ from pathlib import Path
 
 from ..actors import Actor, Traits
 from ..logging_setup import EventLog
-from ..messages import MessageBus
 from ..personnel import Candidate
 from ..sim import Simulation
 from ..world import Region, World
@@ -112,7 +111,7 @@ def _bump(sim: Simulation, region: str, var: str, delta: float, cause: str) -> N
     after = max(0.0, before + delta)
     r.state[var] = after
     sim.event_log.emit(
-        sim.tick,
+        sim.now,
         "true_state_change",
         f"[{region}] {cause}: {var} {before:.0f} → {after:.0f}",
         region=region,
@@ -125,17 +124,16 @@ def _bump(sim: Simulation, region: str, var: str, delta: float, cause: str) -> N
 
 def scripted_events(sim: Simulation) -> None:
     """Wire scripted true-state shocks."""
-    sim.schedule_event(40,  lambda s: _bump(s, "Frontier", "garrison_strength", -700, "raid"))
-    sim.schedule_event(40,  lambda s: _bump(s, "Frontier", "unrest", +30, "raid_aftermath"))
-    sim.schedule_event(60,  lambda s: _bump(s, "Frontier", "unrest", +25, "unrest_spike"))
-    sim.schedule_event(80,  lambda s: _bump(s, "Frontier", "food_stores", -400, "supply_loss"))
-    sim.schedule_event(140, lambda s: _bump(s, "Province", "unrest", +30, "tax_riot"))
+    sim.schedule_scripted(40.0,  lambda s: _bump(s, "Frontier", "garrison_strength", -700, "raid"))
+    sim.schedule_scripted(40.0,  lambda s: _bump(s, "Frontier", "unrest", +30, "raid_aftermath"))
+    sim.schedule_scripted(60.0,  lambda s: _bump(s, "Frontier", "unrest", +25, "unrest_spike"))
+    sim.schedule_scripted(80.0,  lambda s: _bump(s, "Frontier", "food_stores", -400, "supply_loss"))
+    sim.schedule_scripted(140.0, lambda s: _bump(s, "Province", "unrest", +30, "tax_riot"))
 
 
 def run(seed: int, ticks: int, runs_dir: Path) -> Path:
     rng = random.Random(seed)
     world, actors = build()
-    bus = MessageBus(rng=rng, loss_prob=0.08, jitter_frac=0.25)
 
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     base = runs_dir / f"frontier-seed{seed}-{stamp}"
@@ -143,16 +141,17 @@ def run(seed: int, ticks: int, runs_dir: Path) -> Path:
     log.open()
 
     sim = Simulation(
-        world=world, actors=actors, bus=bus, rng=rng, event_log=log,
+        world=world, actors=actors, rng=rng, event_log=log,
         candidate_pool=candidate_pool(),
+        bus_loss_prob=0.08, bus_jitter_frac=0.25,
     )
     scripted_events(sim)
     try:
-        sim.run(total_ticks=ticks)
+        sim.run_until(float(ticks))
 
         # Final snapshot: truth vs. King's belief, for every variable in every region.
         king = actors["king"]
-        log.emit(sim.tick, "final_snapshot", "=== END OF RUN ===")
+        log.emit(sim.now, "final_snapshot", "=== END OF RUN ===")
         for region in world.regions.values():
             for var, true_value in sorted(region.state.items()):
                 subj = Simulation.subject_for(region.name, var)
@@ -163,13 +162,14 @@ def run(seed: int, ticks: int, runs_dir: Path) -> Path:
                         f"king's belief: (none)"
                     )
                 else:
-                    age = sim.tick - belief.last_updated_tick
+                    age = sim.now - belief.last_updated_time
                     summary = (
                         f"[{region.name}] {var}: truth={true_value:.0f}  "
                         f"king ≈ {belief.value:.0f} (conf {belief.confidence:.2f}, "
-                        f"age {age}t, chain {' → '.join(belief.source_chain) or '—'})"
+                        f"age {age:.0f}t, chain {' → '.join(belief.source_chain) or '—'})"
                     )
-                log.emit(sim.tick, "final_snapshot", summary, region=region.name, variable=var)
+                log.emit(sim.now, "final_snapshot", summary,
+                         region=region.name, variable=var)
     finally:
         log.close()
     return base
@@ -178,7 +178,8 @@ def run(seed: int, ticks: int, runs_dir: Path) -> Path:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=1)
-    parser.add_argument("--ticks", type=int, default=200)
+    parser.add_argument("--ticks", type=int, default=200,
+                        help="logical time units to advance")
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
     args = parser.parse_args()
     out = run(args.seed, args.ticks, args.runs_dir)

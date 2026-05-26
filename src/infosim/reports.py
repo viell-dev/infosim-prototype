@@ -15,7 +15,7 @@ class Report:
     estimated_value: float
     confidence: float          # 0..1
     urgency: float = 0.0       # 0..1, currently informational
-    origin_tick: int = 0
+    origin_time: float = 0.0
     source_chain: list[str] = field(default_factory=list)
 
 
@@ -55,7 +55,7 @@ def observe(actor: Actor, subject: str, true_value: float, rng: random.Random) -
         subject=subject,
         estimated_value=true_value + observation_error,
         confidence=confidence,
-        origin_tick=0,
+        origin_time=0.0,
         source_chain=[actor.id],
     )
 
@@ -88,6 +88,6 @@ def relay(actor: Actor, incoming: Report, rng: random.Random) -> Report:
         estimated_value=new_value,
         confidence=new_confidence,
         urgency=incoming.urgency,
-        origin_tick=incoming.origin_tick,
+        origin_time=incoming.origin_time,
         source_chain=[*incoming.source_chain, actor.id],
     )

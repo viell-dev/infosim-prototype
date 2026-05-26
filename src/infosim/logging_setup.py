@@ -26,11 +26,11 @@ class EventLog:
         if self._human_fp:
             self._human_fp.close()
 
-    def emit(self, tick: int, kind: str, human: str, **fields: Any) -> None:
-        event = {"tick": tick, "kind": kind, **fields}
+    def emit(self, time: float, kind: str, human: str, **fields: Any) -> None:
+        event = {"time": time, "kind": kind, **fields}
         self.events.append(event)
         if self._jsonl_fp:
             self._jsonl_fp.write(json.dumps(event, sort_keys=True) + "\n")
-        line = f"t={tick:04d}  {human}\n"
+        line = f"t={time:07.2f}  {human}\n"
         if self._human_fp:
             self._human_fp.write(line)

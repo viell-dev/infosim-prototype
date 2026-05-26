@@ -13,6 +13,12 @@ consequences back into true state; disloyal actors forge reports and skim resour
 King reviews subordinates and replaces them from a candidate pool. No graphics yet — the
 human log is the product.
 
+The simulation runs on a **discrete-event scheduler** (see `src/infosim/scheduler.py`),
+not a fixed tick loop. Each actor has its own cadences for observing, reporting, and
+deciding; the engine drains a global priority queue of events in logical-time order.
+Idle actors consume zero cycles, and the design ports cleanly to an async / multi-process
+runtime when we want real parallelism (Python's GIL means we don't get it for free).
+
 ---
 
 ## Tech stack
@@ -160,6 +166,36 @@ Append-only. Add notes as the design evolves.
     fear-bias direction differ per variable (low food = bad, suppress; high unrest
     = bad, suppress) and produce richer divergence patterns.
 
+### 2026-05-26 — Discrete-event scheduler refactor (Claude Opus 4.7 via Claude Code)
+
+Replaced the fixed-tick loop with a global priority queue of `Event`s. Same
+behaviour shape, fundamentally different engine.
+
+- `Simulation.tick: int` → `Simulation.now: float`. There is no fixed tick
+  rate; logical time advances to the next scheduled event.
+- Each actor schedules its own next OBSERVE / REPORT / DECIDE event after
+  firing, instead of the engine polling everyone each tick. Idle actors
+  consume zero cycles.
+- Messages now schedule a `MESSAGE_ARRIVED` event at their ETA at dispatch
+  time, instead of sitting in a per-bus heap polled every tick.
+- Actions schedule an `ACTION_COMPLETE` event when started, instead of
+  sitting in `sim.actions_in_flight`.
+- Scripted scenario events become `SCRIPTED` events in the same queue.
+- Same-seed runs remain byte-identical (determinism tests pass). The
+  scheduler breaks time ties by insertion-order seq counter, so RNG
+  consumption order is stable.
+- 1000-tick scenario run drops to ~90 ms with 4 events/unit-time; the old
+  loop did ~9 cadence-check no-ops per tick on top of the actual work.
+
+Next layers this enables, **not** in this commit:
+
+- Pull-based `INFO_REQUEST` as a third `MessageKind`, so the King can
+  spend a courier to ask "what's actually going on?" rather than only
+  waiting for ambient pushes.
+- Eventual port to Rust/Tokio for real parallelism — the scheduler
+  abstraction maps cleanly to async channels and the Actor schema
+  is now language-neutral.
+
 ### 2026-05-26 — M3 political pressure (Claude Opus 4.7 via Claude Code)
 
 The institutional failure modes the blueprint asks for now arise cleanly. The
@@ -290,20 +326,21 @@ based on what they believe vs. what is true.
 ```
 src/infosim/
   world.py            # World, Region, VARIABLES (with polarity)
-  actors.py           # Actor, Traits, BeliefRecord; observe/report/decide cadences; inbox
-  reports.py          # Report + observe()/relay() transformation pipeline
+  actors.py           # Actor, Traits, BeliefRecord; observe/report/decide intervals; inbox
+  reports.py          # Report + observe() / relay() + forge_value()
   orders.py           # Order, OrderKind
-  messages.py         # MessageBus + MessageKind (REPORT | ORDER)
+  messages.py         # MessageBus + MessageKind (REPORT | ORDER); schedules arrivals
   actions.py          # ActionInFlight + transfer_garrison / suppress_unrest / send_supplies
   personnel.py        # Candidate pool, appoint / dismiss / pick_replacement
-  policy.py           # decide_king (orders + reviews) / decide_governor / decide_commander
+  policy.py           # decide_king / decide_governor / decide_commander
                       # forgery, skimming, performance reviews live here
-  sim.py              # Simulation tick loop (8 steps now fully wired)
-  logging_setup.py    # JSONL + human dual-sink event log
+  scheduler.py        # Discrete-event Scheduler + Event/EventKind primitives
+  sim.py              # Simulation: dispatches events, owns world+actors+bus+pool
+  logging_setup.py    # JSONL + human dual-sink event log (logical-time keyed)
   scenarios/
     frontier.py       # the three-region scenario + CLI entry
 tools/
-  inspect_run.py      # filter a JSONL run by actor / region / kind / subject
+  inspect_run.py      # filter a JSONL run by actor / region / kind / subject / time range
 tests/
   _runner.py          # stdlib test runner (no pytest)
   test_*.py
