@@ -48,36 +48,41 @@ class Simulation:
         for fn in self.schedule.get(t, []):
             fn(self)
 
-        # 2. local observations (only the most-senior local actor observes, to keep logs readable)
+        # 2. local observations — one observer per region (most-senior by id),
+        # firing only on the actor's observe cadence to keep logs scannable.
         seen_regions: set[str] = set()
         for actor in sorted(self.actors.values(), key=lambda a: a.id):
             if actor.region in seen_regions:
                 continue
             seen_regions.add(actor.region)
+            if t - actor.last_observe_tick < actor.observe_every:
+                continue
             region = self.world.regions[actor.region]
-            subject = self.subject_for(region.name, "garrison_strength")
-            report = observe(actor, subject, float(region.garrison_strength), self.rng)
-            report.origin_tick = t
-            actor.update_belief(
-                subject,
-                report.estimated_value,
-                report.confidence,
-                t,
-                report.source_chain,
-            )
-            self.event_log.emit(
-                t,
-                "observation",
-                f"[{region.name}] {actor.title} {actor.display_name} observes "
-                f"garrison ≈ {report.estimated_value:.0f} (true {region.garrison_strength}, "
-                f"conf {report.confidence:.2f})",
-                actor=actor.id,
-                region=region.name,
-                subject=subject,
-                estimated_value=report.estimated_value,
-                true_value=region.garrison_strength,
-                confidence=report.confidence,
-            )
+            for var, true_value in sorted(region.state.items()):
+                subject = self.subject_for(region.name, var)
+                report = observe(actor, subject, float(true_value), self.rng)
+                report.origin_tick = t
+                actor.update_belief(
+                    subject,
+                    report.estimated_value,
+                    report.confidence,
+                    t,
+                    report.source_chain,
+                )
+                self.event_log.emit(
+                    t,
+                    "observation",
+                    f"[{region.name}] {actor.title} {actor.display_name} observes "
+                    f"{var} ≈ {report.estimated_value:.0f} (true {true_value:.0f}, "
+                    f"conf {report.confidence:.2f})",
+                    actor=actor.id,
+                    region=region.name,
+                    subject=subject,
+                    estimated_value=report.estimated_value,
+                    true_value=true_value,
+                    confidence=report.confidence,
+                )
+            actor.last_observe_tick = t
 
         # 3 & 4. cadence-driven reports get sent upward — one courier carries
         # everything this actor currently believes (own region + relayed beliefs).

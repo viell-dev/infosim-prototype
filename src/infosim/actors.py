@@ -31,8 +31,10 @@ class Actor:
     region: str                 # the region they're physically in
     reports_to: str | None      # actor id of superior, or None
     traits: Traits = field(default_factory=Traits)
-    report_every: int = 10      # cadence in ticks
-    last_report_tick: int = -10_000  # so first cadence fires soon
+    report_every: int = 10      # cadence in ticks for sending reports upward
+    observe_every: int = 5      # cadence in ticks for sampling the local true state
+    last_report_tick: int = -10_000   # so first cadence fires soon
+    last_observe_tick: int = -10_000
     known: dict[str, BeliefRecord] = field(default_factory=dict)
 
     def update_belief(

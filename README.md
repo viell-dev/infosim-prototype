@@ -59,16 +59,20 @@ Three named actors form a hierarchy:
 - **Governor Mira of Halen** (Province): moderate competence, somewhat dishonest, fearful, ambitious.
 - **Commander Aldric Vale** (Frontier): competent observer, but fearful of looking weak.
 
-Each region has one true variable in M1 — `garrison_strength`. Each tick:
+Each region tracks three true variables: `garrison_strength`, `food_stores`, and `unrest`. Each
+variable carries a **polarity** — for garrison and food, low values are bad news; for unrest,
+high values are bad news. Bias terms respect polarity, so a fearful or dishonest actor
+distorts every variable in the *politically convenient* direction. Each tick:
 
-1. Scripted true-state events fire if scheduled (raid, reinforcements, levy drain).
-2. The senior local actor observes their region with competence-scaled noise + fear bias.
-3. On cadence, each subordinate dispatches a courier upward carrying *every* belief they hold.
-   Couriers have travel time, jitter, and a small loss probability.
-4. On arrival, the recipient runs the report through their own transformation
-   (`interpretation_bias + corruption_bias + fear_bias`, confidence degraded), then stores it.
-   That stored belief is what gets re-relayed further up next cadence — so the chain
-   `Commander → Governor → King` shows three layers of compounding distortion and delay.
+1. Scripted true-state events fire if scheduled (raid, reinforcements, levy drain, supply loss…).
+2. On its own observation cadence, the senior local actor samples every variable in its region
+   with competence-scaled noise. **Perception is honest** — fear and corruption don't enter here.
+3. On reporting cadence, each subordinate dispatches a courier upward carrying *every* belief
+   they hold. Couriers have travel time, jitter, and a small loss probability.
+4. On arrival, the recipient runs the report through its own transformation
+   (`interpretation_bias + corruption_bias + fear_bias`, polarity-aware; confidence degraded),
+   then stores it. That stored belief is what gets re-relayed further up next cadence — so the
+   chain `Commander → Governor → King` shows three layers of compounding distortion and delay.
 
 A final snapshot at the end of the run prints truth vs. the King's current belief per region,
 with the chain of actors the King's belief flowed through.
@@ -99,7 +103,7 @@ concept is real.
 
 Append-only. Add notes as the design evolves.
 
-### 2026-05-26 — initial M1 build (Claude Opus 4.7)
+### 2026-05-26 — initial M1 build (Claude Opus 4.7 via Claude Code)
 
 - Three-hop relay chain produces visible drift: at end of 200-tick seed=1 run, King
   believes Frontier ≈ 1255 against truth 1100 — ~14% overestimate, predominantly from
@@ -118,6 +122,33 @@ Append-only. Add notes as the design evolves.
   - Only one variable per region. Adding `food_stores` and `unrest` would let
     fear-bias direction differ per variable (low food = bad, suppress; high unrest
     = bad, suppress) and produce richer divergence patterns.
+
+### 2026-05-26 — pre-M2 refactor (Claude Opus 4.7 via Claude Code)
+
+Addressed all three items from the M1 observations:
+
+- **Perception is now honest.** Fear bias moved from `observe()` to `relay()` so an
+  actor's *private* belief reflects what they actually saw; distortion enters only
+  when they *report* upward. This will make M2 decisions readable — a commander
+  acts on what they truly believe, then sends a politically-shaped version to
+  superiors.
+- **Multi-variable regions with polarity.** Each region now tracks
+  `garrison_strength`, `food_stores`, and `unrest`. Variable metadata in
+  `world.VARIABLES` gives each a `polarity` (+1 / −1) so the same fear and
+  corruption terms can push every variable in the "good news" direction. End-of-run
+  for seed=1 shows the desired emergent pattern:
+  - Frontier garrison: truth 1100 → king 1199 (inflated, low = bad news)
+  - Frontier unrest:   truth 70  → king 60   (understated, high = bad news)
+  - Frontier food:     truth 1000 → king 1149 (inflated)
+
+  All three Frontier biases bend the same political way — the King is reading a
+  systematically rosier version of reality, exactly as designed.
+- **Observation cadence.** Each actor has an `observe_every` interval; the log
+  is roughly 4× shorter and easier to follow event-to-event.
+
+Nothing felt missing for M2 entry after this pass. Next: decisions from belief
+(M2 proper) — at minimum, governors and commanders ordering reallocations
+based on what they believe vs. what is true.
 
 ---
 

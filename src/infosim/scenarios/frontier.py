@@ -14,9 +14,18 @@ from ..world import Region, World
 
 def build() -> tuple[World, dict[str, Actor]]:
     world = World()
-    world.add_region(Region(name="Capital", garrison_strength=1200))
-    world.add_region(Region(name="Province", garrison_strength=800))
-    world.add_region(Region(name="Frontier", garrison_strength=1500))
+    world.add_region(Region(
+        name="Capital",
+        state={"garrison_strength": 1200, "food_stores": 3000, "unrest": 10},
+    ))
+    world.add_region(Region(
+        name="Province",
+        state={"garrison_strength": 800, "food_stores": 1800, "unrest": 25},
+    ))
+    world.add_region(Region(
+        name="Frontier",
+        state={"garrison_strength": 1500, "food_stores": 900, "unrest": 40},
+    ))
     world.connect("Capital", "Province", travel_ticks=4)
     world.connect("Province", "Frontier", travel_ticks=6)
 
@@ -34,9 +43,10 @@ def build() -> tuple[World, dict[str, Actor]]:
         reports_to=None,
         traits=Traits(competence=0.75, honesty=0.9, fear=0.05, education=0.9),
         report_every=999_999,
+        observe_every=8,
     ))
 
-    # Governor: politically cautious, moderately corrupt, reports to king every 12 ticks.
+    # Governor: politically cautious, moderately corrupt.
     add(Actor(
         id="gov_mira",
         display_name="Mira of Halen",
@@ -45,9 +55,10 @@ def build() -> tuple[World, dict[str, Actor]]:
         reports_to="king",
         traits=Traits(competence=0.6, honesty=0.55, fear=0.4, education=0.7, ambition=0.7),
         report_every=12,
+        observe_every=6,
     ))
 
-    # Frontier commander: competent, frightened of looking weak, reports every 8 ticks.
+    # Frontier commander: competent observer but frightened of looking weak.
     add(Actor(
         id="cmd_aldric",
         display_name="Aldric Vale",
@@ -56,62 +67,38 @@ def build() -> tuple[World, dict[str, Actor]]:
         reports_to="gov_mira",
         traits=Traits(competence=0.8, honesty=0.7, fear=0.6, education=0.5),
         report_every=8,
+        observe_every=4,
     ))
 
     return world, actors
 
 
+def _bump(sim: Simulation, region: str, var: str, delta: float, cause: str) -> None:
+    r = sim.world.regions[region]
+    before = r.state[var]
+    after = max(0.0, before + delta)
+    r.state[var] = after
+    sim.event_log.emit(
+        sim.tick,
+        "true_state_change",
+        f"[{region}] {cause}: {var} {before:.0f} → {after:.0f}",
+        region=region,
+        variable=var,
+        before=before,
+        after=after,
+        cause=cause,
+    )
+
+
 def scripted_events(sim: Simulation) -> None:
-    """Wire scripted true-state shocks. Logs are inside Simulation for the changes too."""
-
-    def raid_frontier(s: Simulation) -> None:
-        before = s.world.regions["Frontier"].garrison_strength
-        s.world.regions["Frontier"].garrison_strength = max(0, before - 700)
-        after = s.world.regions["Frontier"].garrison_strength
-        s.event_log.emit(
-            s.tick,
-            "true_state_change",
-            f"[Frontier] RAID — garrison {before} → {after}",
-            region="Frontier",
-            variable="garrison_strength",
-            before=before,
-            after=after,
-            cause="raid",
-        )
-
-    def reinforcements(s: Simulation) -> None:
-        before = s.world.regions["Frontier"].garrison_strength
-        s.world.regions["Frontier"].garrison_strength = before + 300
-        s.event_log.emit(
-            s.tick,
-            "true_state_change",
-            f"[Frontier] reinforcements arrive — garrison {before} → "
-            f"{s.world.regions['Frontier'].garrison_strength}",
-            region="Frontier",
-            variable="garrison_strength",
-            before=before,
-            after=s.world.regions["Frontier"].garrison_strength,
-            cause="reinforcements",
-        )
-
-    def province_drain(s: Simulation) -> None:
-        before = s.world.regions["Province"].garrison_strength
-        s.world.regions["Province"].garrison_strength = max(0, before - 200)
-        s.event_log.emit(
-            s.tick,
-            "true_state_change",
-            f"[Province] levies sent away — garrison {before} → "
-            f"{s.world.regions['Province'].garrison_strength}",
-            region="Province",
-            variable="garrison_strength",
-            before=before,
-            after=s.world.regions["Province"].garrison_strength,
-            cause="levy_dispatch",
-        )
-
-    sim.schedule_event(40, raid_frontier)
-    sim.schedule_event(120, province_drain)
-    sim.schedule_event(160, reinforcements)
+    """Wire scripted true-state shocks."""
+    sim.schedule_event(40,  lambda s: _bump(s, "Frontier", "garrison_strength", -700, "raid"))
+    sim.schedule_event(40,  lambda s: _bump(s, "Frontier", "unrest", +30, "raid_aftermath"))
+    sim.schedule_event(80,  lambda s: _bump(s, "Frontier", "food_stores", -400, "supply_loss"))
+    sim.schedule_event(120, lambda s: _bump(s, "Province", "garrison_strength", -200, "levy_dispatch"))
+    sim.schedule_event(120, lambda s: _bump(s, "Province", "unrest", +15, "levy_resentment"))
+    sim.schedule_event(160, lambda s: _bump(s, "Frontier", "garrison_strength", +300, "reinforcements"))
+    sim.schedule_event(180, lambda s: _bump(s, "Frontier", "food_stores", +500, "supply_train"))
 
 
 def run(seed: int, ticks: int, runs_dir: Path) -> Path:
@@ -129,26 +116,26 @@ def run(seed: int, ticks: int, runs_dir: Path) -> Path:
     try:
         sim.run(total_ticks=ticks)
 
-        # Final snapshot: truth vs. King's belief
+        # Final snapshot: truth vs. King's belief, for every variable in every region.
         king = actors["king"]
-        log.emit(
-            sim.tick,
-            "final_snapshot",
-            "=== END OF RUN ===",
-        )
+        log.emit(sim.tick, "final_snapshot", "=== END OF RUN ===")
         for region in world.regions.values():
-            subj = Simulation.subject_for(region.name, "garrison_strength")
-            belief = king.known.get(subj)
-            if belief is None:
-                summary = f"[{region.name}] truth={region.garrison_strength}  king's belief: (none)"
-            else:
-                age = sim.tick - belief.last_updated_tick
-                summary = (
-                    f"[{region.name}] truth={region.garrison_strength}  "
-                    f"king believes ≈ {belief.value:.0f} (conf {belief.confidence:.2f}, "
-                    f"age {age}t, chain {' → '.join(belief.source_chain) or '—'})"
-                )
-            log.emit(sim.tick, "final_snapshot", summary, region=region.name)
+            for var, true_value in sorted(region.state.items()):
+                subj = Simulation.subject_for(region.name, var)
+                belief = king.known.get(subj)
+                if belief is None:
+                    summary = (
+                        f"[{region.name}] {var}: truth={true_value:.0f}  "
+                        f"king's belief: (none)"
+                    )
+                else:
+                    age = sim.tick - belief.last_updated_tick
+                    summary = (
+                        f"[{region.name}] {var}: truth={true_value:.0f}  "
+                        f"king ≈ {belief.value:.0f} (conf {belief.confidence:.2f}, "
+                        f"age {age}t, chain {' → '.join(belief.source_chain) or '—'})"
+                    )
+                log.emit(sim.tick, "final_snapshot", summary, region=region.name, variable=var)
     finally:
         log.close()
     return base
