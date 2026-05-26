@@ -6,8 +6,10 @@ separation produces interesting emergent narratives when read as logs. If readin
 like reading a believable little history of misinformation and delay, the concept is worth investing
 in. If not, it isn't.
 
-This repository implements **Milestone 1 — Information Sandbox** only. No graphics, no UI,
-no decisions yet. Just regions, actors, couriers, reports, and divergence between truth and belief.
+This repository currently implements **Milestone 1 (Information Sandbox)** and **Milestone 2
+(Hierarchical Decisions)**. Information flows up through delayed, biased reports; orders flow
+down through couriers; actions execute over time and feed consequences back into true state.
+No graphics yet — the human log is the product.
 
 ---
 
@@ -49,7 +51,7 @@ Outputs land in `runs/frontier-seed<N>-<timestamp>.{jsonl,log}`.
 
 ---
 
-## What the M1 scenario does
+## What the scenario does (M1 + M2)
 
 `scenarios/frontier.py` wires a three-region line: **Capital → Province → Frontier**.
 
@@ -76,6 +78,21 @@ distorts every variable in the *politically convenient* direction. Each tick:
 
 A final snapshot at the end of the run prints truth vs. the King's current belief per region,
 with the chain of actors the King's belief flowed through.
+
+**M2 adds the downward half of the loop:**
+
+5. On a slower **decide cadence** each actor runs its policy (`src/infosim/policy.py`). The King
+   issues `REINFORCE`, `SUPPRESS_UNREST`, and `SEND_SUPPLIES` orders to subordinates based on
+   his belief about regions further down the chain. The Governor translates received orders
+   into concrete actions (`transfer_garrison`, `send_supplies`) or sub-orders down to the
+   Commander. The Commander executes suppression orders and autonomously sends **urgent
+   reports** upward when his honest local belief about food or garrison crosses critical
+   thresholds.
+6. **Orders travel on the same courier bus as reports** — they're delayed, jittered, and can
+   be lost. Forgery and alteration are deferred to M3.
+7. **Actions in flight** (`src/infosim/actions.py`) represent physical work-in-progress: a
+   marching column or a suppression campaign with its own duration. They resolve into the
+   true state when their completion tick arrives, closing the feedback loop.
 
 ---
 
@@ -123,6 +140,48 @@ Append-only. Add notes as the design evolves.
     fear-bias direction differ per variable (low food = bad, suppress; high unrest
     = bad, suppress) and produce richer divergence patterns.
 
+### 2026-05-26 — M2 hierarchical decisions (Claude Opus 4.7 via Claude Code)
+
+The closed loop works. Seed=1 trace from a 250-tick run:
+
+- **t=40**: raid drops Frontier garrison 1500→800, unrest 40→70.
+- **t=60**: King's first decision cycle after the raid. He orders only
+  `SUPPRESS_UNREST` — *not* `REINFORCE`, because the Commander's fear-biased
+  reports inflated the garrison number above the king's threshold.
+  **This is the exact failure mode the design was built to surface**:
+  political distortion delays a critical military decision by tens of ticks.
+- **t=80**: Suppression order finally reaches the Commander (20 ticks after issue
+  via Capital→Province→Frontier). The King also begins issuing `REINFORCE`
+  and `SEND_SUPPLIES` orders as the bias-attenuated picture finally darkens
+  enough.
+- **t=88, 96, 104**: Commander sends URGENT food reports out-of-cadence
+  because his *honest* local belief sees food crossing 500. Honest perception
+  vs. politically-shaped reporting — both behaviors visible at once.
+- **t=92**: First suppression *succeeds*, unrest 95→62. Second wave on
+  another seed has historically backfired (110 from 95), demonstrating the
+  competence-modulated stochastic outcome.
+- **t=96–116**: Reinforcements arrive (90 troops then 57), food arrives (217).
+  The action queue produces a believable cadence of consequences trickling
+  back to the front.
+
+End-of-run truth vs. King's belief stays politically tinted: Frontier
+garrison truth 997, king believes 1145; Province garrison truth 603,
+king 514 (notable undershoot — the Governor's noisy observation that run
+landed below truth and the relay biases didn't overcome it).
+
+Things to watch / address before M3:
+
+- The King re-issues the same orders every decide cycle (no memory of
+  pending orders). That actually produces a great narrative — escalating
+  intervention because feedback hasn't arrived yet — but it would feel
+  better if the King tracked "I've already asked for this" with a cooldown.
+- The Governor's REINFORCE/SUPPRESS handling is hardcoded; standing
+  directives with priorities are a clean M3 generalization.
+- Forgery, interception, and alteration of orders/reports would
+  immediately make this much more game-like.
+- The Commander's autonomous food alarms fire every decide cycle while
+  food remains below threshold — should fire once per crossing.
+
 ### 2026-05-26 — pre-M2 refactor (Claude Opus 4.7 via Claude Code)
 
 Addressed all three items from the M1 observations:
@@ -156,14 +215,17 @@ based on what they believe vs. what is true.
 
 ```
 src/infosim/
-  world.py            # World, Region, adjacency
-  actors.py           # Actor, Traits, BeliefRecord
+  world.py            # World, Region, VARIABLES (with polarity)
+  actors.py           # Actor, Traits, BeliefRecord; observe/report/decide cadences; inbox
   reports.py          # Report + observe()/relay() transformation pipeline
-  messages.py         # MessageBus — heap-queued courier delivery with loss/jitter
-  sim.py              # Simulation tick loop
+  orders.py           # Order, OrderKind
+  messages.py         # MessageBus + MessageKind (REPORT | ORDER)
+  actions.py          # ActionInFlight + transfer_garrison / suppress_unrest / send_supplies
+  policy.py           # decide_king / decide_governor / decide_commander
+  sim.py              # Simulation tick loop (8 steps now fully wired)
   logging_setup.py    # JSONL + human dual-sink event log
   scenarios/
-    frontier.py       # the M1 three-region scenario + CLI entry
+    frontier.py       # the three-region scenario + CLI entry
 tools/
   inspect_run.py      # filter a JSONL run by actor / region / kind / subject
 tests/
@@ -175,7 +237,8 @@ tests/
 
 ## Out of scope (deliberately)
 
-- Decisions / orders flowing downward → Milestone 2.
-- Politics, loyalty consequences, appointments → Milestone 3.
+- Politics, loyalty consequences, appointments, forgery/interception → Milestone 3.
 - Any visual output → Milestone 4.
-- More than one true variable per region — expand only once single-variable stories are alive.
+- Multiple subordinates per superior, or hierarchy depth > 3.
+- Standing-directive data structure with priority resolution (M2 hardcodes thresholds
+  in policies).

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .orders import Order
 
 
 @dataclass
@@ -33,9 +37,12 @@ class Actor:
     traits: Traits = field(default_factory=Traits)
     report_every: int = 10      # cadence in ticks for sending reports upward
     observe_every: int = 5      # cadence in ticks for sampling the local true state
+    decide_every: int = 10      # cadence in ticks for running decision policy
     last_report_tick: int = -10_000   # so first cadence fires soon
     last_observe_tick: int = -10_000
+    last_decide_tick: int = -10_000
     known: dict[str, BeliefRecord] = field(default_factory=dict)
+    inbox: list["Order"] = field(default_factory=list)  # arrived orders awaiting decide()
 
     def update_belief(
         self,

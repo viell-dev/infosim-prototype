@@ -44,6 +44,7 @@ def build() -> tuple[World, dict[str, Actor]]:
         traits=Traits(competence=0.75, honesty=0.9, fear=0.05, education=0.9),
         report_every=999_999,
         observe_every=8,
+        decide_every=20,
     ))
 
     # Governor: politically cautious, moderately corrupt.
@@ -56,6 +57,7 @@ def build() -> tuple[World, dict[str, Actor]]:
         traits=Traits(competence=0.6, honesty=0.55, fear=0.4, education=0.7, ambition=0.7),
         report_every=12,
         observe_every=6,
+        decide_every=10,
     ))
 
     # Frontier commander: competent observer but frightened of looking weak.
@@ -68,6 +70,7 @@ def build() -> tuple[World, dict[str, Actor]]:
         traits=Traits(competence=0.8, honesty=0.7, fear=0.6, education=0.5),
         report_every=8,
         observe_every=4,
+        decide_every=8,
     ))
 
     return world, actors
@@ -94,11 +97,9 @@ def scripted_events(sim: Simulation) -> None:
     """Wire scripted true-state shocks."""
     sim.schedule_event(40,  lambda s: _bump(s, "Frontier", "garrison_strength", -700, "raid"))
     sim.schedule_event(40,  lambda s: _bump(s, "Frontier", "unrest", +30, "raid_aftermath"))
+    sim.schedule_event(60,  lambda s: _bump(s, "Frontier", "unrest", +25, "unrest_spike"))
     sim.schedule_event(80,  lambda s: _bump(s, "Frontier", "food_stores", -400, "supply_loss"))
-    sim.schedule_event(120, lambda s: _bump(s, "Province", "garrison_strength", -200, "levy_dispatch"))
-    sim.schedule_event(120, lambda s: _bump(s, "Province", "unrest", +15, "levy_resentment"))
-    sim.schedule_event(160, lambda s: _bump(s, "Frontier", "garrison_strength", +300, "reinforcements"))
-    sim.schedule_event(180, lambda s: _bump(s, "Frontier", "food_stores", +500, "supply_train"))
+    sim.schedule_event(140, lambda s: _bump(s, "Province", "unrest", +30, "tax_riot"))
 
 
 def run(seed: int, ticks: int, runs_dir: Path) -> Path:

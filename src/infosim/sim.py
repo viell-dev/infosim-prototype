@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import itertools
 import random
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Callable, Iterator
 
+from .actions import ActionInFlight
 from .actors import Actor
 from .logging_setup import EventLog
-from .messages import MessageBus
+from .messages import MessageBus, MessageKind
+from .policy import run_policy
 from .reports import Report, observe, relay
 from .world import World
 
@@ -23,6 +26,8 @@ class Simulation:
     rng: random.Random
     event_log: EventLog
     schedule: dict[int, list[ScriptedEvent]] = field(default_factory=dict)
+    actions_in_flight: list[ActionInFlight] = field(default_factory=list)
+    _order_ids: Iterator[int] = field(default_factory=lambda: itertools.count(1))
     tick: int = 0
 
     # Subject naming convention
@@ -130,7 +135,7 @@ class Simulation:
                 )
             actor.last_report_tick = t
 
-        # 5. deliver due messages
+        # 5. deliver due messages — branch on kind
         for msg in self.bus.deliver_due(t):
             if msg.lost:
                 self.event_log.emit(
@@ -139,36 +144,66 @@ class Simulation:
                     f"courier #{msg.id} ({msg.origin_region} → {msg.destination_region}) "
                     f"never arrived",
                     message_id=msg.id,
+                    message_kind=msg.kind.value,
                     sender=msg.sender_actor,
                     recipient=msg.recipient_actor,
                 )
                 continue
 
             recipient = self.actors[msg.recipient_actor]
-            transformed = relay(recipient, msg.payload, self.rng)
-            recipient.update_belief(
-                transformed.subject,
-                transformed.estimated_value,
-                transformed.confidence,
-                t,
-                transformed.source_chain,
-            )
-            self.event_log.emit(
-                t,
-                "receive",
-                f"[{recipient.region}] {recipient.title} {recipient.display_name} receives "
-                f"courier #{msg.id} from {msg.sender_actor}: "
-                f"{transformed.subject} ≈ {transformed.estimated_value:.0f} "
-                f"(conf {transformed.confidence:.2f}, chain: {' → '.join(transformed.source_chain)})",
-                message_id=msg.id,
-                recipient=recipient.id,
-                subject=transformed.subject,
-                value=transformed.estimated_value,
-                confidence=transformed.confidence,
-                source_chain=transformed.source_chain,
-            )
 
-            # 6. if recipient has a superior, queue an onward report at their next cadence
-            # (handled by the normal cadence loop on a future tick — keeps the model simple)
+            if msg.kind == MessageKind.REPORT:
+                transformed = relay(recipient, msg.payload, self.rng)
+                recipient.update_belief(
+                    transformed.subject,
+                    transformed.estimated_value,
+                    transformed.confidence,
+                    t,
+                    transformed.source_chain,
+                )
+                self.event_log.emit(
+                    t,
+                    "receive",
+                    f"[{recipient.region}] {recipient.title} {recipient.display_name} receives "
+                    f"courier #{msg.id} from {msg.sender_actor}: "
+                    f"{transformed.subject} ≈ {transformed.estimated_value:.0f} "
+                    f"(conf {transformed.confidence:.2f}, chain: {' → '.join(transformed.source_chain)})",
+                    message_id=msg.id,
+                    recipient=recipient.id,
+                    subject=transformed.subject,
+                    value=transformed.estimated_value,
+                    confidence=transformed.confidence,
+                    source_chain=transformed.source_chain,
+                )
+            else:  # ORDER
+                recipient.inbox.append(msg.payload)
+                self.event_log.emit(
+                    t,
+                    "order_delivered",
+                    f"[{recipient.region}] {recipient.title} {recipient.display_name} receives "
+                    f"order #{msg.payload.id} from {msg.sender_actor}: "
+                    f"{msg.payload.kind.value} {msg.payload.target_region} "
+                    f"(magnitude {msg.payload.magnitude:.0f})",
+                    message_id=msg.id,
+                    order_id=msg.payload.id,
+                    recipient=recipient.id,
+                    order_kind=msg.payload.kind.value,
+                    target_region=msg.payload.target_region,
+                    magnitude=msg.payload.magnitude,
+                )
 
-        # 7 & 8: decision + consequence hooks are stubs in M1.
+        # 7. decide — actors run their policies on cadence
+        for actor in sorted(self.actors.values(), key=lambda a: a.id):
+            if t - actor.last_decide_tick < actor.decide_every:
+                continue
+            run_policy(self, actor)
+            actor.last_decide_tick = t
+
+        # 8. resolve any actions whose completion tick is now
+        remaining: list[ActionInFlight] = []
+        for action in self.actions_in_flight:
+            if action.complete_tick <= t:
+                action.effect_fn(self)
+            else:
+                remaining.append(action)
+        self.actions_in_flight = remaining
