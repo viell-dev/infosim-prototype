@@ -198,6 +198,58 @@ they can be answered.
 
 Append-only. Add notes as the design evolves.
 
+### 2026-06-02 — Structure review after INFO_REQUEST/deep-chain work (GPT-5 via Codex)
+
+Quick pass over `docs/blueprint.md`, the current README, recent git
+history, repo layout, core modules, scenarios, and tests. This is still
+an experiment rather than a product codebase, so the read is deliberately
+about *major* distortions that could affect design conclusions, not
+normal prototype roughness.
+
+Current shape is coherent. The repo is clean on `main`, with a fast
+history from M1 sandbox → scheduler → hierarchy → political pressure →
+sibling topology → stress tooling → INFO_REQUESTs → deep-chain
+validation. The code is small enough to reason about directly: core
+engine in `src/infosim/`, scenarios in `src/infosim/scenarios/`,
+analysis helpers in `tools/`, and focused stdlib tests in `tests/`.
+The test suite passed: 31/31 via `python3 tests/_runner.py`.
+
+Major structural notes:
+
+- **`policy.py` is now the pressure point.** It is ~900 lines and holds
+  role behavior, global thresholds, corruption/skimming, review logic,
+  order routing, INFO_REQUEST routing, replacement hooks, and audit
+  initiation. Fine for the current sandbox; before a port or major
+  feature branch, this is the obvious file to split.
+- **"Arbitrary depth" is proven for report propagation and middle-rung
+  order forwarding, not yet for every policy surface.** `decide_king()`
+  only considers direct subordinates and one level deeper. Chain-health
+  review and some INFO_REQUEST subject routing still inspect children /
+  grandchildren rather than all transitive descendants. The deep-chain
+  scenario validates the core idea, but it should not be read as "every
+  gameplay rule is already depth-agnostic."
+- **The generic-genre claim is aspirational.** The Actor schema and
+  message bus are generic, but `garrison_strength`, `food_stores`, and
+  `unrest` are still hardcoded in the stat polarity table, policy
+  thresholds, audit target construction, and scenario tooling. Replacing
+  the stat set is plausible, but it is not currently a config-only swap.
+- **The README has historical drift by design.** Older obs entries are
+  useful because they record the reasoning path, but some "open" notes
+  later became done. Treat the newest entries and the top-level run
+  instructions as current; treat old queues as historical context unless
+  a later entry reaffirms them.
+- **Role dispatch is intentionally narrow.** Policies are keyed by title
+  (`King`, `Governor`, `Commander`). That keeps the prototype legible,
+  but it is the main mismatch with the broader "same Actor at every
+  depth / any institution" ambition.
+
+Net read: no alarming breakage. The main risk is that the docs can sound
+more general than the implementation. For experiment validity, that
+means the next serious validation should either stay inside the current
+scenario envelope, or first make depth traversal / stat schemas / policy
+dispatch honestly generic enough that the experiment is testing the
+intended architecture rather than today's hand-tuned medieval case.
+
 ### 2026-06-02 — Engine refactor: actor schema + INFO_REQUEST + arbitrary depth (Claude Opus 4.7 via Claude Code)
 
 Three commits land the engine reshape we discussed (and the user
@@ -857,7 +909,8 @@ tests/
 ## Out of scope (deliberately)
 
 - Any visual output → Milestone 4.
-- Multiple subordinates per superior, or hierarchy depth > 3.
+- Fully generic deep-hierarchy gameplay policy beyond the validated
+  4-level scenario.
 - Standing-directive data structure with priority resolution (thresholds remain hardcoded
   in `policy.py`).
 - Forged *orders* (a subordinate altering a directive before relaying it down).
