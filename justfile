@@ -43,10 +43,21 @@ frontier seed="1" ticks="200" runs_dir="runs":
 deep-chain seed="1" ticks="400" runs_dir="runs":
     @just run deep_chain "{{seed}}" "{{ticks}}" "{{runs_dir}}"
 
-# Generate a plain HTML debug map for a run JSONL file.
-map path scenario="" out="":
+# Generate a plain HTML debug map. Defaults to the latest runs/*.jsonl file.
+map path="" scenario="" out="":
     #!/usr/bin/env bash
     set -euo pipefail
+    jsonl_path="{{path}}"
+    if [ -z "$jsonl_path" ]; then
+        jsonl_path=$(find runs -maxdepth 1 -type f -name '*.jsonl' -printf '%T@ %p\n' \
+            | sort -nr \
+            | head -n 1 \
+            | cut -d' ' -f2-)
+        if [ -z "$jsonl_path" ]; then
+            echo "No JSONL run files found under runs/" >&2
+            exit 2
+        fi
+    fi
     args=()
     if [ -n "{{scenario}}" ]; then
         args+=(--scenario "{{scenario}}")
@@ -54,7 +65,7 @@ map path scenario="" out="":
     if [ -n "{{out}}" ]; then
         args+=(--out "{{out}}")
     fi
-    output=$(python3 tools/map_run.py "{{path}}" "${args[@]}")
+    output=$(python3 tools/map_run.py "$jsonl_path" "${args[@]}")
     html_path="${output#Wrote }"
     echo "HTML:  $(realpath "$html_path")"
 

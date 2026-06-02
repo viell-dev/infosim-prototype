@@ -60,7 +60,10 @@ just run deep_chain 1 400
 just inspect-kind runs/frontier-seed1-20260602-220543.jsonl dispatch
 just inspect-region runs/frontier-seed1-20260602-220543.jsonl Frontier
 
-# generate a plain HTML debug map for a run
+# generate a plain HTML debug map for the latest run
+just map
+
+# or map a specific run
 just map runs/frontier-seed1-20260602-220543.jsonl
 
 # aggregate experiments
@@ -71,7 +74,8 @@ just stress 50 300
 Outputs land in `runs/frontier-seed<N>-<timestamp>.{jsonl,log}`.
 `just run`, `just frontier`, and `just deep-chain` print the generated JSONL
 and log filenames as full paths. `just map` writes a sibling `*-map.html` file
-next to the JSONL input and prints the full HTML path.
+for the latest `runs/*.jsonl` by default and prints the full HTML path. Pass a
+JSONL path to map a specific run.
 
 ---
 
@@ -254,7 +258,9 @@ Added a repo-level `justfile` so common workflows use short, stable commands:
 `just check`, `just inspect-*`, `just sweep`, and `just stress`. The README's
 run examples now point at those recipes instead of spelling out `PYTHONPATH`
 and script paths directly. The run and map recipes print their generated output
-filenames as full paths so the next artifact to open is unambiguous.
+filenames as full paths so the next artifact to open is unambiguous. `just map`
+now defaults to the newest JSONL file in `runs/`, while still accepting an
+explicit path.
 
 Validation:
 
@@ -263,6 +269,8 @@ Validation:
 - `just frontier 1 10 /tmp/infosim-just-check-paths` printed full JSONL/log paths.
 - `just map /tmp/infosim-just-check-paths/frontier-seed1-20260602-224741.jsonl`
   printed the full HTML map path.
+- `just map` mapped the latest JSONL file in `runs/` and printed the full HTML
+  path.
 - `just deep-chain 1 10 /tmp/infosim-just-check-paths` printed full JSONL/log paths.
 
 ### 2026-06-02 — Wide frontier topology: 1/2/3 commanders (GPT-5 via Codex)
