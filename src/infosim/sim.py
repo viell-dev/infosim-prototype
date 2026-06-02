@@ -43,6 +43,7 @@ class Simulation:
     candidate_pool: list[Candidate] = field(default_factory=list)
     used_candidates: set[str] = field(default_factory=set)
     _order_ids: Iterator[int] = field(default_factory=lambda: itertools.count(1))
+    _request_ids: Iterator[int] = field(default_factory=lambda: itertools.count(1))
     _bootstrapped: bool = field(default=False, init=False)
     # Bus tuning is captured at construction time so dataclass init stays
     # ergonomic.
@@ -144,6 +145,9 @@ class Simulation:
             return
         if event.kind is EventKind.ACTION_COMPLETE:
             event.payload.effect_fn(self)
+            return
+        if event.kind is EventKind.REQUEST_TIMEOUT:
+            self._handle_request_timeout(event.actor_id, event.payload)
             return
 
         # Actor-keyed events (OBSERVE / REPORT / DECIDE). The actor may have
@@ -333,19 +337,65 @@ class Simulation:
                 confidence=transformed.confidence,
                 source_chain=transformed.source_chain,
             )
-        else:  # ORDER
+        elif msg.kind is MessageKind.ORDER:
             recipient.inbox.append(msg.payload)
             self.event_log.emit(
                 self.now,
                 "order_delivered",
-                f"[{recipient.region}] {recipient.title} {recipient.display_name} receives "
+                f"[{recipient.location}] {recipient.title} {recipient.display_name} receives "
                 f"order #{msg.payload.id} from {msg.sender_actor}: "
-                f"{msg.payload.kind.value} {msg.payload.target_region} "
+                f"{msg.payload.kind.value} {msg.payload.target_actor} "
                 f"(magnitude {msg.payload.magnitude:.0f})",
                 message_id=msg.id,
                 order_id=msg.payload.id,
                 recipient=recipient.id,
                 order_kind=msg.payload.kind.value,
-                target_region=msg.payload.target_region,
+                target_actor=msg.payload.target_actor,
                 magnitude=msg.payload.magnitude,
             )
+        elif msg.kind is MessageKind.INFO_REQUEST:
+            recipient.request_inbox.append((msg.sender_actor, msg.payload))
+            self.event_log.emit(
+                self.now,
+                "request_delivered",
+                f"[{recipient.location}] {recipient.title} {recipient.display_name} receives "
+                f"INFO_REQUEST #{msg.payload.correlation_id} from {msg.sender_actor} "
+                f"(originator {msg.payload.originator}, subjects {msg.payload.subjects})",
+                message_id=msg.id,
+                correlation_id=msg.payload.correlation_id,
+                recipient=recipient.id,
+                sender=msg.sender_actor,
+                originator=msg.payload.originator,
+                subjects=msg.payload.subjects,
+                note=msg.payload.note,
+            )
+        elif msg.kind is MessageKind.INFO_RESPONSE:
+            # Routed via the policy module — it knows how to relay vs consume.
+            from .policy import handle_info_response
+            handle_info_response(self, recipient, msg.sender_actor, msg.payload)
+
+    def _handle_request_timeout(self, actor_id: str | None, correlation_id: int) -> None:
+        if actor_id is None:
+            return
+        actor = self.actors.get(actor_id)
+        if actor is None:
+            return
+        pending = actor.pending_requests.pop(correlation_id, None)
+        if pending is None:
+            return  # already answered
+        self.event_log.emit(
+            self.now,
+            "request_timeout",
+            f"[{actor.location}] {actor.title} {actor.display_name} request "
+            f"#{correlation_id} timed out (was waiting on {pending.waiting_for} "
+            f"for {pending.subjects})",
+            actor=actor.id,
+            correlation_id=correlation_id,
+            waiting_for=pending.waiting_for,
+            subjects=pending.subjects,
+        )
+        # If this was a relay, send a refused response upstream so the
+        # original asker can also clear their pending entry.
+        if pending.parent_correlation_id is not None and pending.parent_from_actor is not None:
+            from .policy import dispatch_refusal_to_parent
+            dispatch_refusal_to_parent(self, actor, pending, reason="downstream timeout")

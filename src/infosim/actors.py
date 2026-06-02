@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .orders import Order
+    from .requests import InfoRequest, PendingRequest
 
 
 @dataclass
@@ -55,6 +56,12 @@ class Actor:
     # subordinates / siblings / superior (built from received reports).
     known: dict[str, BeliefRecord] = field(default_factory=dict)
     inbox: list["Order"] = field(default_factory=list)
+    # Pull-based information primitives. request_inbox holds tuples of
+    # (immediate sender id, InfoRequest) so the recipient knows who to
+    # reply to. pending_requests tracks outgoing requests still awaiting
+    # a response.
+    request_inbox: list[tuple[str, "InfoRequest"]] = field(default_factory=list)
+    pending_requests: dict[int, "PendingRequest"] = field(default_factory=dict)
     tenure_start_time: float = 0.0
     strikes: dict[str, int] = field(default_factory=dict)
 

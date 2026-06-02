@@ -8,12 +8,15 @@ from typing import Any
 
 from .orders import Order
 from .reports import Report
+from .requests import InfoRequest, InfoResponse
 from .scheduler import Event, EventKind, Scheduler
 
 
 class MessageKind(enum.Enum):
     REPORT = "REPORT"
     ORDER = "ORDER"
+    INFO_REQUEST = "INFO_REQUEST"
+    INFO_RESPONSE = "INFO_RESPONSE"
 
 
 @dataclass
@@ -110,5 +113,35 @@ class MessageBus:
     ) -> Message:
         return self._dispatch(
             MessageKind.ORDER, sender_actor, recipient_actor,
+            origin_region, destination_region, base_travel_ticks, dispatch_time, payload,
+        )
+
+    def dispatch_request(
+        self,
+        sender_actor: str,
+        recipient_actor: str,
+        origin_region: str,
+        destination_region: str,
+        base_travel_ticks: float,
+        dispatch_time: float,
+        payload: InfoRequest,
+    ) -> Message:
+        return self._dispatch(
+            MessageKind.INFO_REQUEST, sender_actor, recipient_actor,
+            origin_region, destination_region, base_travel_ticks, dispatch_time, payload,
+        )
+
+    def dispatch_response(
+        self,
+        sender_actor: str,
+        recipient_actor: str,
+        origin_region: str,
+        destination_region: str,
+        base_travel_ticks: float,
+        dispatch_time: float,
+        payload: InfoResponse,
+    ) -> Message:
+        return self._dispatch(
+            MessageKind.INFO_RESPONSE, sender_actor, recipient_actor,
             origin_region, destination_region, base_travel_ticks, dispatch_time, payload,
         )
