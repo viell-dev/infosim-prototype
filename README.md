@@ -174,10 +174,15 @@ are ordered by expected information per hour of work.
    a courier to ask "what's actually going on?" rather than passively waiting
    for ambient pushes. ~80 lines in Python; ~3× that in Rust. Only worth
    doing if (1) and (2) suggest the King feels too passive.
-4. **Stress dial.** Crank misinformation / corruption / loss parameters to
+4. ~~**Stress dial.** Crank misinformation / corruption / loss parameters to
    extremes and watch whether the system degrades gracefully or collapses
    into noise — and crank them to zero to confirm divergence vanishes. Tells
-   us whether the dynamics are tuned in a sensitive range.
+   us whether the dynamics are tuned in a sensitive range.~~
+   **Done 2026-06-02.** `tools/stress.py`. System degrades gracefully;
+   pristine bottoms out at observation noise; default sits mid-curve, not
+   on a cliff. See obs entry. Surfaced a threshold-cliff at the forgery
+   gate and a counter-intuitive "lies protect the governor from review"
+   dynamic that wants comparison-based review on top of siblings.
 
 These run on the existing engine. None require structural changes before
 they can be answered.
@@ -187,6 +192,86 @@ they can be answered.
 ## Observations log
 
 Append-only. Add notes as the design evolves.
+
+### 2026-06-02 — Stress dial (Claude Opus 4.7 via Claude Code)
+
+Built `tools/stress.py` — runs the scenario under five preset profiles
+(pristine, low, default, high, broken) and prints a comparison matrix.
+Each profile mutates `bus_loss_prob`, `bus_jitter_frac`, and an
+"integrity" scalar that pushes loyalty/honesty toward 1 (integrity=0)
+or away from 1 (integrity>1), with the fear trait pushed toward 0
+inversely. `ambition` is left untouched — it isn't a moral axis.
+
+Run: 5 profiles × 50 seeds × 300 ticks.
+
+King's belief vs. truth, **signed mean % error**:
+
+| subject                       | pristine |  low  | default | high  | broken |
+| ----------------------------- | -------: | ----: | ------: | ----: | -----: |
+| Frontier.garrison_strength    |    +3.6  |  +5.8 |   +37.5 |+113.4 | +126.0 |
+| Borderlands.garrison_strength |    +1.9  |  +0.8 |    +5.2 |  +6.1 |  +11.7 |
+| Frontier.food_stores          |    +3.6  |  +6.4 |   +47.2 |+119.0 | +126.6 |
+| Borderlands.food_stores       |    +3.9  |  +3.2 |    +4.1 |  +7.9 |   +7.2 |
+| Frontier.unrest               |    −2.0  |  −5.3 |   −30.0 | −69.6 |  −58.4 |
+| Borderlands.unrest            |    −8.6  |  −1.8 |    +0.5 |  −2.7 |   +5.1 |
+
+Mean events per seed:
+
+| kind            | pristine |  low |  default |  high  | broken |
+| --------------- | -------: | ---: | -------: | -----: | -----: |
+| report_forged   |      0   |   0  |     60.4 |   83.0 |   83.4 |
+| skim            |      0   |   0  |     22.8 |   29.6 |   29.4 |
+| dismissed       |    4.9   |  4.5 |      3.5 |    2.3 |    1.9 |
+| courier_lost    |      0   |   11 |     43.2 |  108.6 |  221.1 |
+| urgent_report   |    4.8   |  4.5 |     10.8 |   14.9 |   16.6 |
+
+What this tells us:
+
+- **System degrades gracefully.** Errors grow monotonically with stress
+  on the corrupt chain (3.6 → 5.8 → 38 → 113 → 126%) and stay near zero
+  on the honest chain regardless of stress. Nothing pathological — no
+  saturation, no collapse into noise.
+- **Pristine bottoms out at ~3–8% error.** This is observation noise +
+  relay competence noise — the engine's *floor*. Confirms that
+  divergence at default is genuinely caused by the bias mechanics, not
+  by accumulated numerical drift.
+- **There is a cliff at the forgery / skim threshold.** Between
+  pristine and low, behaviour barely changes — forgery and skim stay
+  at zero because halved gaps leave loyalty above the 0.4 trigger.
+  Between low and default the dynamics *switch on* abruptly. The
+  threshold gates are too discrete for smooth stress response.
+  Making forgery probability a smooth function of loyalty
+  (`(1 − loyalty)^k`) with no hard gate would give a more dial-like
+  response curve.
+- **The forging commander protects his governor from review.**
+  Counterintuitive but clean: as stress rises, Aldric's lies inflate
+  Frontier's reported numbers so much that Mira no longer trips the
+  King's strike thresholds — dismissals *drop* 3.5 → 1.9. Meanwhile
+  on the pristine chain, the honest governor *Mira* gets dismissed
+  *more* (4.9/seed) because the scripted shocks genuinely push the
+  region below the King's absolute thresholds. **The King's
+  review system rewards lying.** This is correct emergent behaviour
+  and also the natural lead-in to comparison-based review (compare
+  siblings; review against trend, not absolute).
+- **The integrity dial is asymmetric and that's right.** Even at
+  broken (×2.5), Borderlands stays under ±12% because Talen's
+  loyalty/honesty defaults are very high — scaling the gap toward 1
+  doesn't move him as much as it moves Aldric. Reporter integrity is
+  doing what reporter integrity should.
+
+Net read: dynamics are not in a sensitive range. The default profile
+sits in the middle of a long, smooth curve, not on a cliff edge. Two
+clear improvement targets came out of this experiment, neither
+blocking a port:
+
+1. **Smooth the forgery/skim gates** — make probability a continuous
+   function of `loyalty` instead of binary `loyalty < 0.4`. The
+   stress dial would then show a smooth dose-response instead of the
+   pristine↔low plateau.
+2. **Compare-against-peer review.** The King should notice that
+   Borderlands is reporting raid damage while Frontier (under similar
+   shocks) is reporting prosperity, and strike-count accordingly.
+   This is the natural exploitation of the sibling artifact.
 
 ### 2026-06-02 — Sibling topology, two parallel chains (Claude Opus 4.7 via Claude Code)
 
