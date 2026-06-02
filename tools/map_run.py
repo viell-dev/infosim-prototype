@@ -86,6 +86,10 @@ def _scenario_build(name: str) -> tuple[Any, dict[str, Actor]]:
         from infosim.scenarios import deep_chain
 
         return deep_chain.build()
+    if name in {"space_miner", "spaceminer"}:
+        from infosim.scenarios import space_miner
+
+        return space_miner.build()
     raise ValueError(f"unknown scenario: {name}")
 
 
@@ -95,6 +99,8 @@ def _infer_scenario(path: Path) -> str:
         return "frontier"
     if stem.startswith("deepchain-") or stem.startswith("deep-chain-"):
         return "deep_chain"
+    if stem.startswith("space_miner-") or stem.startswith("spaceminer-"):
+        return "space_miner"
     raise ValueError("could not infer scenario from filename; pass --scenario")
 
 
@@ -242,34 +248,67 @@ def _apply_event(state: ReplayState, ev: dict[str, Any]) -> None:
         state.actors[actor_id].stats[str(ev["stat"])] = float(ev["after"])
         return
 
+    if kind == "alien_contact" and actor_id in state.actors:
+        state.actors[actor_id].stats["alien_presence"] = float(ev["after"])
+        return
+
+    if kind == "mining" and actor_id in state.actors:
+        stats = state.actors[actor_id].stats
+        stats["ore"] = stats.get("ore", 0.0) + float(ev["amount"])
+        return
+
+    if kind == "consumption" and actor_id in state.actors:
+        stats = state.actors[actor_id].stats
+        stats["ore"] = max(0.0, stats.get("ore", 0.0) - float(ev["amount"]))
+        return
+
+    if kind == "defense" and ev.get("target_actor") in state.actors:
+        state.actors[str(ev["target_actor"])].stats["alien_presence"] = float(ev["after"])
+        return
+
     if kind == "skim" and actor_id in state.actors:
         stats = state.actors[actor_id].stats
-        stats["food_stores"] = max(0.0, stats.get("food_stores", 0.0) - float(ev["amount"]))
+        stat = str(ev.get("stat") or ("ore" if "ore" in stats else "food_stores"))
+        stats[stat] = max(0.0, stats.get(stat, 0.0) - float(ev["amount"]))
         return
 
     if kind == "action_started":
         detail = ev.get("kind_detail")
-        if detail == "transfer_garrison" and ev.get("src_actor") in state.actors:
+        if (
+            detail in {"transfer_garrison", "send_supplies", "ore_tax", "manager_tax"}
+            and ev.get("src_actor") in state.actors
+        ):
             stats = state.actors[str(ev["src_actor"])].stats
-            stats["garrison_strength"] = max(
+            stat = str(ev.get("stat") or (
+                "garrison_strength" if detail == "transfer_garrison" else "food_stores"
+            ))
+            stats[stat] = max(
                 0.0,
-                stats.get("garrison_strength", 0.0) - float(ev["magnitude"]),
+                stats.get(stat, 0.0) - float(ev["magnitude"]),
             )
-        elif detail == "send_supplies" and ev.get("src_actor") in state.actors:
-            stats = state.actors[str(ev["src_actor"])].stats
-            stats["food_stores"] = max(0.0, stats.get("food_stores", 0.0) - float(ev["magnitude"]))
         return
 
     if kind == "action_completed":
         detail = ev.get("kind_detail")
-        if detail == "transfer_garrison_arrive" and ev.get("dst_actor") in state.actors:
+        if (
+            detail in {
+                "transfer_garrison_arrive",
+                "send_supplies_arrive",
+                "ore_tax_arrive",
+                "manager_tax_arrive",
+            }
+            and ev.get("dst_actor") in state.actors
+        ):
             stats = state.actors[str(ev["dst_actor"])].stats
-            stats["garrison_strength"] = stats.get("garrison_strength", 0.0) + float(
-                ev["magnitude"],
-            )
-        elif detail == "send_supplies_arrive" and ev.get("dst_actor") in state.actors:
-            stats = state.actors[str(ev["dst_actor"])].stats
-            stats["food_stores"] = stats.get("food_stores", 0.0) + float(ev["magnitude"])
+            stat = str(ev.get("stat") or (
+                "garrison_strength" if detail == "transfer_garrison_arrive" else "food_stores"
+            ))
+            stats[stat] = stats.get(stat, 0.0) + float(ev["magnitude"])
+        elif detail == "move_actor_arrive" and actor_id in state.actors:
+            actor = state.actors[actor_id]
+            actor.location = str(ev["target_location"])
+            if ev.get("assigned_commander") is not None:
+                actor.commander = str(ev["assigned_commander"])
         elif detail == "suppress_unrest_resolve" and ev.get("target_actor") in state.actors:
             state.actors[str(ev["target_actor"])].stats["unrest"] = float(ev["after"])
         return
@@ -452,8 +491,8 @@ def render_html(checkpoints: list[Checkpoint], source_path: Path) -> str:
     blocks = []
     for checkpoint in checkpoints:
         state = checkpoint.state
-        king = state.actors.get("king")
-        tree = "".join(_render_actor(state, root, king) for root in _roots(state))
+        apex = state.actors.get("king") or state.actors.get("ceo")
+        tree = "".join(_render_actor(state, root, apex) for root in _roots(state))
         blocks.append(
             '<article class="checkpoint">'
             f"<h2>{html.escape(checkpoint.label)} <span>t={checkpoint.time:.0f}</span></h2>"
@@ -569,7 +608,10 @@ td {{ width: 26%; }}
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("path", type=Path, help="run JSONL file")
-    parser.add_argument("--scenario", choices=("frontier", "deep_chain", "deepchain"))
+    parser.add_argument(
+        "--scenario",
+        choices=("frontier", "deep_chain", "deepchain", "space_miner", "spaceminer"),
+    )
     parser.add_argument("--out", type=Path)
     args = parser.parse_args()
 

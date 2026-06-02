@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from infosim.scenarios.space_miner import run
-from tools.map_run import _read_events
+from tools.map_run import _infer_scenario, _read_events, build_checkpoints, render_html
 
 
 def test_space_miner_exercises_mining_tax_movement_and_defense(tmp_path) -> None:
@@ -30,3 +30,18 @@ def test_space_miner_exercises_mining_tax_movement_and_defense(tmp_path) -> None
     assert any(ev.get("assigned_commander") == "mgr_ceres" for ev in arrivals)
     assert any(ev.get("target_location") == "Europa Station" for ev in arrivals)
     assert any(ev.get("assigned_commander") == "ceo" for ev in arrivals)
+
+
+def test_space_miner_map_infers_and_replays_mobile_commanders(tmp_path) -> None:
+    base = run(seed=1, ticks=230, runs_dir=tmp_path)
+    jsonl_path = base.with_suffix(".jsonl")
+    events = _read_events(jsonl_path)
+    scenario = _infer_scenario(jsonl_path)
+    checkpoints = build_checkpoints(events, scenario)
+    html = render_html(checkpoints, jsonl_path)
+
+    assert scenario == "space_miner"
+    assert "Director Vale" in html
+    assert "Orion Dray" in html
+    assert checkpoints[-1].state.actors["cmd_orion"].location == "Homeworld"
+    assert checkpoints[-1].state.actors["cmd_orion"].commander == "ceo"

@@ -254,6 +254,24 @@ they can be answered.
 
 Append-only. Add notes as the design evolves.
 
+### 2026-06-02 — Space-miner map replay fix (GPT-5 via Codex)
+
+Fixed `just map` for `space_miner` runs. The default `just map` recipe selects
+the latest JSONL file, so once the latest run was `space_miner-...jsonl`, map
+generation failed because `tools/map_run.py` only inferred `frontier` and
+`deep_chain` filenames. The mapper now infers `space_miner`, builds the
+space-miner initial state, and replays the new event kinds: mining, ore
+consumption, ore taxes, alien contact, station defence, and mobile Commander
+arrival/reassignment.
+
+Validation:
+
+- `just map` generated `runs/space_miner-seed1-20260602-232417-map.html`.
+- `just map runs/space_miner-seed1-20260602-232220.jsonl` generated the
+  explicit map path successfully.
+- `just check` passes all 35 tests, including a regression test that verifies
+  `cmd_orion` returns to Homeworld under the CEO in the replayed map state.
+
 ### 2026-06-02 — Space-miner scenario and free-agent commanders (GPT-5 via Codex)
 
 Added `scenarios/space_miner.py`, a setting swap that keeps the same delayed
