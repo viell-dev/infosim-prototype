@@ -251,6 +251,27 @@ they can be answered.
 
 Append-only. Add notes as the design evolves.
 
+### 2026-06-02 — Map vacant-office replay fix (GPT-5 via Codex)
+
+Fixed the HTML map replay for runs where a governor is dismissed after the
+candidate pool is exhausted. The simulator logs `appointment_failed` and leaves
+the office vacant; the map previously marked the dismissed governor inactive
+but had no visible vacant-office node, so active commanders under that office
+were orphaned and disappeared from the rendered End checkpoint.
+
+`tools/map_run.py` now creates a replay-only `Vacant` office node on
+`appointment_failed`, preserves the office lineage, and nests the still-active
+subordinates under that vacant office. Regenerated
+`runs/frontier-seed1-20260602-225242-map.html`; its End block now shows Vanek
+in Lowlands plus vacant Governor nodes for Marches and Province with their
+commanders beneath them.
+
+Validation:
+
+- `just map runs/frontier-seed1-20260602-225242.jsonl` regenerated the affected
+  HTML map.
+- `just check` -> all 33 tests passed, including a vacant-office regression.
+
 ### 2026-06-02 — Just command wrapper (GPT-5 via Codex)
 
 Added a repo-level `justfile` so common workflows use short, stable commands:

@@ -290,6 +290,9 @@ def _apply_event(state: ReplayState, ev: dict[str, Any]) -> None:
         location = str(ev["location"])
         prior = state.last_exit_by_location.get(location)
         new_id = str(ev["actor"])
+        for actor in state.actors.values():
+            if actor.active and actor.location == location and actor.id.startswith("vacant:"):
+                actor.active = False
         new_actor = ActorState(
             id=new_id,
             display_name=_event_display_name(ev),
@@ -309,6 +312,27 @@ def _apply_event(state: ReplayState, ev: dict[str, Any]) -> None:
             for child_id in prior.children:
                 if child_id in state.actors and state.actors[child_id].active:
                     state.actors[child_id].commander = new_id
+        return
+
+    if kind == "appointment_failed":
+        location = str(ev["location"])
+        prior = state.last_exit_by_location.get(location)
+        if prior is None:
+            return
+        vacant_id = f"vacant:{location}"
+        vacant_actor = ActorState(
+            id=vacant_id,
+            display_name="Vacant",
+            title=prior.title,
+            location=location,
+            commander=prior.commander,
+            stats=dict(prior.stats),
+        )
+        state.actors[vacant_id] = vacant_actor
+        state.office_lineages.setdefault(location, []).append("Vacant")
+        for child_id in prior.children:
+            if child_id in state.actors and state.actors[child_id].active:
+                state.actors[child_id].commander = vacant_id
         return
 
 
