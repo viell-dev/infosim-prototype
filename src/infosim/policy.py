@@ -188,6 +188,90 @@ def _chain_actors(sim: "Simulation", sub: "Actor") -> list[str]:
     return [sub.id] + [s.id for s in _subordinates(sim, sub)]
 
 
+def _transitive_subs(sim: "Simulation", actor: "Actor") -> set[str]:
+    """All descendant actor ids reachable through the commander chain."""
+    seen: set[str] = set()
+    stack: list["Actor"] = list(_subordinates(sim, actor))
+    while stack:
+        s = stack.pop()
+        if s.id in seen:
+            continue
+        seen.add(s.id)
+        stack.extend(_subordinates(sim, s))
+    return seen
+
+
+def _route_to_subordinate(sim: "Simulation", actor: "Actor", target_id: str) -> "Actor | None":
+    """Find the direct subordinate of `actor` whose chain covers `target_id`."""
+    for sub in _subordinates(sim, actor):
+        if sub.id == target_id or target_id in _transitive_subs(sim, sub):
+            return sub
+    return None
+
+
+def _handle_middle_order(sim: "Simulation", actor: "Actor", order: "Order") -> None:
+    """Generic order handling at any middle rung.
+
+    Targets self  -> execute locally.
+    Targets a direct subordinate -> for SUPPRESS, delegate downward; for
+        REINFORCE / SEND_SUPPLIES, transfer from own stats directly to them.
+    Targets a deeper actor -> forward the order to whichever direct sub
+        covers that target's chain (the deeper layer handles delivery from
+        there). This is how arbitrary depth works without the engine knowing
+        about it.
+    Targets an unreachable actor -> drop with a log entry.
+    """
+    if order.target_actor == actor.id:
+        if order.kind is OrderKind.SUPPRESS_UNREST:
+            suppress_unrest(
+                sim, actor.id, target_actor_id=actor.id,
+                duration=SUPPRESS_DURATION,
+                competence=actor.traits.competence, rng=sim.rng,
+            )
+        # REINFORCE / SEND_SUPPLIES targeted at self are a no-op — the
+        # actor would be transferring from themselves to themselves.
+        return
+
+    direct_sub = next(
+        (s for s in _subordinates(sim, actor) if s.id == order.target_actor),
+        None,
+    )
+    if direct_sub is not None:
+        if order.kind is OrderKind.REINFORCE:
+            transfer_garrison(
+                sim, actor.id, src_actor_id=actor.id,
+                dst_actor_id=direct_sub.id, magnitude=order.magnitude,
+            )
+        elif order.kind is OrderKind.SEND_SUPPLIES:
+            send_supplies(
+                sim, actor.id, src_actor_id=actor.id,
+                dst_actor_id=direct_sub.id, magnitude=order.magnitude,
+            )
+        elif order.kind is OrderKind.SUPPRESS_UNREST:
+            _dispatch_order(
+                sim, actor, direct_sub, OrderKind.SUPPRESS_UNREST,
+                target_actor=direct_sub.id,
+                magnitude=order.magnitude, priority=order.priority,
+            )
+        return
+
+    # Deeper target — forward to the direct sub on the path.
+    routed_via = _route_to_subordinate(sim, actor, order.target_actor)
+    if routed_via is None:
+        sim.event_log.emit(
+            sim.now, "order_unroutable",
+            f"[{actor.location}] {actor.title} {actor.display_name} cannot route "
+            f"{order.kind.value} {order.target_actor} — not in chain",
+            actor=actor.id, order_id=order.id, target_actor=order.target_actor,
+        )
+        return
+    _dispatch_order(
+        sim, actor, routed_via, order.kind,
+        target_actor=order.target_actor,
+        magnitude=order.magnitude, priority=order.priority,
+    )
+
+
 def _chain_health(sim: "Simulation", king: "Actor", sub: "Actor") -> float | None:
     """Scalar 'how healthy is this sub's span of command' from the King's
     beliefs. Higher = better. Returns None if the King has no relevant beliefs.
@@ -350,33 +434,7 @@ def decide_governor(sim: "Simulation", actor: "Actor") -> None:
             order_kind=order.kind.value,
             target_actor=order.target_actor,
         )
-
-        target = sim.actors.get(order.target_actor)
-        if order.kind == OrderKind.REINFORCE and order.target_actor != actor.id:
-            transfer_garrison(
-                sim, actor.id, src_actor_id=actor.id,
-                dst_actor_id=order.target_actor, magnitude=order.magnitude,
-            )
-        elif order.kind == OrderKind.SUPPRESS_UNREST:
-            if order.target_actor == actor.id:
-                # governor handles their own unrest
-                suppress_unrest(
-                    sim, actor.id, target_actor_id=actor.id,
-                    duration=SUPPRESS_DURATION,
-                    competence=actor.traits.competence, rng=sim.rng,
-                )
-            elif target is not None and target.commander == actor.id:
-                # delegate to the subordinate
-                _dispatch_order(
-                    sim, actor, target, OrderKind.SUPPRESS_UNREST,
-                    target_actor=order.target_actor,
-                    magnitude=order.magnitude, priority=order.priority,
-                )
-        elif order.kind == OrderKind.SEND_SUPPLIES and order.target_actor != actor.id:
-            send_supplies(
-                sim, actor.id, src_actor_id=actor.id,
-                dst_actor_id=order.target_actor, magnitude=order.magnitude,
-            )
+        _handle_middle_order(sim, actor, order)
 
     # autonomous suppression if local unrest belief is severe
     own_unrest = actor.known.get(sim.subject_for(actor.id, "unrest"))

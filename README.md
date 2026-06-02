@@ -170,10 +170,15 @@ are ordered by expected information per hour of work.
    with siblings the King can *compare* reports, which is where political
    reasoning actually starts ("Aldric's numbers look different from
    Brennar's"). Engine supports it; only the scenario needs widening.
-3. **Pull-based `INFO_REQUEST`.** Third `MessageKind` so superiors can spend
+3. ~~**Pull-based `INFO_REQUEST`.** Third `MessageKind` so superiors can spend
    a courier to ask "what's actually going on?" rather than passively waiting
-   for ambient pushes. ~80 lines in Python; ~3× that in Rust. Only worth
-   doing if (1) and (2) suggest the King feels too passive.
+   for ambient pushes.~~
+   **Done 2026-06-02** as part of the engine refactor. Two kinds
+   (`INFO_REQUEST` + `INFO_RESPONSE`) over the same bus, plus per-actor
+   `request_inbox` / `pending_requests` and a `REQUEST_TIMEOUT` event.
+   The King initiates audits on peer-suspicion strikes; each hop is a
+   fresh decision point (forward / cache / fabricate / refuse). See
+   obs entry.
 4. ~~**Stress dial.** Crank misinformation / corruption / loss parameters to
    extremes and watch whether the system degrades gracefully or collapses
    into noise — and crank them to zero to confirm divergence vanishes. Tells
@@ -192,6 +197,98 @@ they can be answered.
 ## Observations log
 
 Append-only. Add notes as the design evolves.
+
+### 2026-06-02 — Engine refactor: actor schema + INFO_REQUEST + arbitrary depth (Claude Opus 4.7 via Claude Code)
+
+Three commits land the engine reshape we discussed (and the user
+confirmed) the prototype needed before any port to a faster language.
+The math the scenario uses is the same; what changed is the *shape*.
+
+**Step 1 — Unified actor schema.** Every node in the hierarchy uses
+the same Actor dataclass. Stats live on actors (not regions);
+`region` → `location`, `reports_to` → `commander`. Subjects are keyed
+by actor id rather than region name
+(``"Frontier.garrison_strength"`` →
+``"cmd_aldric.garrison_strength"``). Region/Location is topology-
+only; resources are tied to the *office* (location) so a dismissed
+official's stockpile transfers to their replacement. Sweep numbers
+unchanged — pure refactor, behaviour-preserving.
+
+**Step 2 — INFO_REQUEST / INFO_RESPONSE.** Two new MessageKinds ride
+the existing bus. Each actor gains `request_inbox` and
+`pending_requests`; the scheduler gains `REQUEST_TIMEOUT`. The
+king's policy is no longer purely passive: when peer comparison
+flags a chain as "suspiciously rosy," he spends a courier to
+**ask**. The relay's policy is the five-way choice we sketched —
+forward, answer-from-cache, fabricate, refuse, investigate
+(deferred). A disloyal relay (loyalty <
+``REQUEST_TRUST_THRESHOLD``) defaults to **protective mode**:
+answers from cache without asking the subordinate, possibly
+forging on the way through. On the return path the same forgery
+dynamic can shade the values as they pass back upstream. Lost
+couriers, timeouts, and orphan responses all handled. Verified end-
+to-end on a single-seed trace where corr=1 is lost, times out at
+t=100 and the King re-audits; corr=2 completes the full round-trip
+with truth integrated at t=118; corr=7's downstream response is
+lost on the way back and gov_mira's own timeout auto-dispatches a
+refusal upstream.
+
+**Step 3 — Arbitrary depth.** Generalised the middle-rung order
+handler so a Governor receiving an order for a deeper-than-direct
+target forwards the order to whichever direct subordinate covers
+that target's chain. Built `scenarios/deep_chain.py` — a 4-level
+hierarchy (King → General → Colonel → Captain). The same policies,
+same engine, no depth-specific code anywhere. End-of-run snapshot
+on seed=1 (Captain Dren, the deepest actor, set disloyal +
+ambitious):
+
+```
+[Outpost] Dren Marcellus garrison_strength:
+  truth=800  king ≈ 2077 (chain cap_dren → col_renna → gen_kallen → king)
+[Outpost] Dren Marcellus unrest:
+  truth=90   king ≈ 47   (chain cap_dren → col_renna → gen_kallen → king)
+[Outpost] Dren Marcellus food_stores:
+  truth=90   king ≈ 115  (chain cap_dren → col_renna → gen_kallen → king)
+```
+
+Three relay hops of compounding forgery produce a +160% over-
+estimate of the deepest garrison. The source_chain shows exactly
+the path each belief traveled. That's the design promise: the
+deeper the chain, the more leverage misinformation has — and the
+engine handles it for free because every layer is the same shape.
+
+**What the engine is now ready for** (not necessarily what the
+prototype does):
+
+- Any genre: replace the {garrison_strength, food_stores, unrest}
+  stat schema with X4's {ore, credits, energy} or an RTS's
+  {soldiers, ammo, morale} and the same code runs. No engine module
+  mentions those keys.
+- Arbitrary depth: tested at 4 layers, no upper bound encoded
+  anywhere. A complete corporate / military / feudal / political
+  hierarchy with dozens of layers would use the same machinery.
+- Player as actor: the player's "policy" is just `drain UI input
+  queue → dispatch messages`. Engine doesn't distinguish player
+  from NPC actors. Real-time vs paused vs scheduled is a scheduler
+  config, not a code change.
+- Cross-rung addressing: the bus can deliver to any actor at any
+  depth; the only "cost" is the chain-of-locations travel time.
+- Pull-based intelligence gathering at any level: any actor with a
+  reason and a courier budget can audit any subordinate.
+
+**Pre-port residual queue** (none blocking a port; these are the
+next *interesting* design moves):
+
+- Detection-avoidance for skim ("3% off the top is safer than
+  20%") and forgery (small lies harder to catch than large ones).
+- Sibling collusion / conflict — peer-to-peer messaging on the
+  same bus, or cross-rung routing via the King as broker.
+- A reputation gradient separate from traits (King trusts Cassia
+  more, weights her reports higher).
+- `strikes_by_kind` memory so the King's review doesn't reset
+  when complaint type changes.
+- Audit results weighted differently from ambient pushes ("freshly
+  authenticated, treat as truer than a routine report").
 
 ### 2026-06-02 — Smoothed gates + peer-comparison review (Claude Opus 4.7 via Claude Code)
 
@@ -731,22 +828,25 @@ based on what they believe vs. what is true.
 
 ```
 src/infosim/
-  world.py            # World, Region, VARIABLES (with polarity)
-  actors.py           # Actor, Traits, BeliefRecord; observe/report/decide intervals; inbox
+  world.py            # World, Location (topology only), STATS (polarity table)
+  actors.py           # Actor, Traits, BeliefRecord; stats, cadences, inboxes
   reports.py          # Report + observe() / relay() + forge_value()
-  orders.py           # Order, OrderKind
-  messages.py         # MessageBus + MessageKind (REPORT | ORDER); schedules arrivals
+  orders.py           # Order, OrderKind (targets actor ids)
+  requests.py         # InfoRequest, InfoResponse, PendingRequest
+  messages.py         # MessageBus + MessageKind (REPORT | ORDER | INFO_REQUEST | INFO_RESPONSE)
   actions.py          # ActionInFlight + transfer_garrison / suppress_unrest / send_supplies
   personnel.py        # Candidate pool, appoint / dismiss / pick_replacement
-  policy.py           # decide_king / decide_governor / decide_commander
-                      # forgery, skimming, performance reviews live here
+  policy.py           # decide_*, peer review, forgery/skim, audit handling
   scheduler.py        # Discrete-event Scheduler + Event/EventKind primitives
   sim.py              # Simulation: dispatches events, owns world+actors+bus+pool
-  logging_setup.py    # JSONL + human dual-sink event log (logical-time keyed)
+  logging_setup.py    # JSONL + human dual-sink event log
   scenarios/
-    frontier.py       # the three-region scenario + CLI entry
+    frontier.py       # two-chain scenario (corrupt vs honest) + CLI
+    deep_chain.py     # 4-level scenario validating arbitrary depth
 tools/
-  inspect_run.py      # filter a JSONL run by actor / region / kind / subject / time range
+  inspect_run.py      # filter a JSONL run by actor / location / kind / subject / time range
+  sweep.py            # multi-seed aggregation
+  stress.py           # parameter-stress comparison
 tests/
   _runner.py          # stdlib test runner (no pytest)
   test_*.py
