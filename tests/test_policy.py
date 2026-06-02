@@ -6,7 +6,7 @@ from pathlib import Path
 from infosim.actors import Actor, BeliefRecord, Traits
 from infosim.logging_setup import EventLog
 from infosim.orders import Order, OrderKind
-from infosim.policy import decide_king
+from infosim.policies.roles import decide_king
 from infosim.scheduler import EventKind
 from infosim.sim import Simulation
 from infosim.world import Location, World

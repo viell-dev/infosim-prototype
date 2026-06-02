@@ -5,7 +5,7 @@ from pathlib import Path
 
 from infosim.actors import Actor, Traits
 from infosim.logging_setup import EventLog
-from infosim.policy import _maybe_skim
+from infosim.policies.corruption import _maybe_skim
 from infosim.sim import Simulation
 from infosim.world import Location, World
 

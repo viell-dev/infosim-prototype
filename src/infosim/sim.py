@@ -9,7 +9,7 @@ from .actors import Actor
 from .logging_setup import EventLog
 from .messages import Message, MessageBus, MessageKind
 from .personnel import Candidate
-from .policy import run_policy
+from .policies import run_policy
 from .reports import Report, forge_value, observe, relay
 from .scheduler import Event, EventKind, Scheduler
 from .world import VARIABLES, World
@@ -370,8 +370,8 @@ class Simulation:
                 note=msg.payload.note,
             )
         elif msg.kind is MessageKind.INFO_RESPONSE:
-            # Routed via the policy module — it knows how to relay vs consume.
-            from .policy import handle_info_response
+            # Routed via the policy modules - they know how to relay vs consume.
+            from .policies.info_requests import handle_info_response
             handle_info_response(self, recipient, msg.sender_actor, msg.payload)
 
     def _handle_request_timeout(self, actor_id: str | None, correlation_id: int) -> None:
@@ -397,5 +397,5 @@ class Simulation:
         # If this was a relay, send a refused response upstream so the
         # original asker can also clear their pending entry.
         if pending.parent_correlation_id is not None and pending.parent_from_actor is not None:
-            from .policy import dispatch_refusal_to_parent
+            from .policies.info_requests import dispatch_refusal_to_parent
             dispatch_refusal_to_parent(self, actor, pending, reason="downstream timeout")

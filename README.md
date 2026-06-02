@@ -59,6 +59,26 @@ Outputs land in `runs/frontier-seed<N>-<timestamp>.{jsonl,log}`.
 
 ---
 
+## Code layout
+
+- `src/infosim/sim.py` is the discrete-event engine: scheduling, actor cadences,
+  message arrival handling, observations, and pushed reports.
+- `src/infosim/policies/` holds decision and political behavior:
+  `roles.py` dispatches King / Governor / Commander decisions, `orders.py`
+  routes and executes downward orders, `info_requests.py` owns the pull-based
+  request / response path, `review.py` handles strikes and replacement,
+  `corruption.py` handles skimming, and `constants.py` keeps the current
+  scenario thresholds in one place.
+- `src/infosim/policy.py` is a compatibility facade for older experiments that
+  imported policy helpers directly.
+- `src/infosim/actions.py`, `messages.py`, `reports.py`, `requests.py`,
+  `orders.py`, `scheduler.py`, `world.py`, and `personnel.py` are focused
+  data / mechanics modules used by the engine and policies.
+- `src/infosim/scenarios/` wires concrete worlds and actors; `tools/` contains
+  analysis helpers; `tests/` mirrors the purpose-specific behavior under test.
+
+---
+
 ## What the scenario does (M1 + M2 + M3)
 
 `scenarios/frontier.py` wires **two parallel chains** under the same King:
@@ -117,7 +137,7 @@ with the chain of actors the King's belief flowed through.
 
 **M2 adds the downward half of the loop:**
 
-5. On a slower **decide cadence** each actor runs its policy (`src/infosim/policy.py`). The King
+5. On a slower **decide cadence** each actor runs its policy (`src/infosim/policies/`). The King
    issues `REINFORCE`, `SUPPRESS_UNREST`, and `SEND_SUPPLIES` orders to subordinates based on
    his belief about regions further down the chain. The Governor translates received orders
    into concrete actions (`transfer_garrison`, `send_supplies`) or sub-orders down to the
@@ -197,6 +217,21 @@ they can be answered.
 ## Observations log
 
 Append-only. Add notes as the design evolves.
+
+### 2026-06-02 — Policy module split (GPT-5 via Codex)
+
+`policy.py` had become the central pile-up point called out in the
+previous structure review. The code is now split by responsibility under
+`src/infosim/policies/`: role decisions, order routing, INFO_REQUEST
+handling, review / dismissal, corruption, hierarchy helpers, and policy
+constants. `src/infosim/policy.py` remains as a compatibility facade so
+older local experiments can still import the old names.
+
+The tests were migrated to import the new purpose-specific modules rather
+than the facade, which makes the split itself part of what the suite
+checks. Behavior should be unchanged; the validation run passed 31/31 via
+`python3 tests/_runner.py`, and `python3 -m compileall -q src tests`
+also passed.
 
 ### 2026-06-02 — Structure review after INFO_REQUEST/deep-chain work (GPT-5 via Codex)
 
@@ -888,7 +923,15 @@ src/infosim/
   messages.py         # MessageBus + MessageKind (REPORT | ORDER | INFO_REQUEST | INFO_RESPONSE)
   actions.py          # ActionInFlight + transfer_garrison / suppress_unrest / send_supplies
   personnel.py        # Candidate pool, appoint / dismiss / pick_replacement
-  policy.py           # decide_*, peer review, forgery/skim, audit handling
+  policy.py           # compatibility facade for the policies package
+  policies/
+    constants.py      # current scenario thresholds
+    corruption.py     # skimming policy
+    hierarchy.py      # subordinate traversal / routing helpers
+    info_requests.py  # INFO_REQUEST / INFO_RESPONSE handling
+    orders.py         # downward order dispatch and middle-rung routing
+    review.py         # peer review, strikes, dismissal / replacement
+    roles.py          # decide_* and run_policy role dispatch
   scheduler.py        # Discrete-event Scheduler + Event/EventKind primitives
   sim.py              # Simulation: dispatches events, owns world+actors+bus+pool
   logging_setup.py    # JSONL + human dual-sink event log
@@ -912,7 +955,7 @@ tests/
 - Fully generic deep-hierarchy gameplay policy beyond the validated
   4-level scenario.
 - Standing-directive data structure with priority resolution (thresholds remain hardcoded
-  in `policy.py`).
+  in `policies/constants.py`).
 - Forged *orders* (a subordinate altering a directive before relaying it down).
 - Interception of couriers by hostile actors.
 - Lazy instantiation of historical figures from a large population pool.
