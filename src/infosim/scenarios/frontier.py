@@ -13,24 +13,45 @@ from ..world import Location, World
 
 
 def build() -> tuple[World, dict[str, Actor]]:
-    """Two-chain topology so the King has siblings to compare.
+    """Wide topology so the King has sibling governors and commanders to compare.
 
-        Capital  ──→ Province (Mira)   ──→ Frontier    (Aldric)   corrupt chain
-                 └→ Marches  (Cassia)  ──→ Borderlands (Talen)    honest chain
+        Capital  ──→ Province (Mira)   ──→ Frontier    (Aldric)   corrupt cluster
+                 │                    ├─→ Harbor      (Brenn)
+                 │                    └─→ Highlands   (Kyra)
+                 ├→ Marches  (Cassia)  ──→ Borderlands (Talen)    honest chain
+                 └→ Lowlands (Neria)   ──→ Rivergate   (Soren)    mixed chain
+                                      └─→ Old Road    (Mael)
 
-    The two chains face similar (but not identical) shocks. Reports diverge
-    not only because of distance and bias but because the *people* differ —
-    one chain has a disloyal commander forging numbers and skimming food,
-    the other has a loyal commander reporting honestly. The King's belief
-    snapshot at end-of-run is the comparison artifact.
+    The three governors have one, two, and three direct commanders. Their
+    regions face similar (but not identical) shocks. Reports diverge not only
+    because of distance and bias but because the *people* differ — one cluster
+    has a disloyal commander forging numbers and skimming food, another has a
+    loyal commander reporting honestly, and the middle branch mixes incentives.
+    The King's belief snapshot at end-of-run is the comparison artifact.
     """
     world = World()
-    for loc_name in ("Capital", "Province", "Frontier", "Marches", "Borderlands"):
+    for loc_name in (
+        "Capital",
+        "Province",
+        "Frontier",
+        "Harbor",
+        "Highlands",
+        "Marches",
+        "Borderlands",
+        "Lowlands",
+        "Rivergate",
+        "Old Road",
+    ):
         world.add_location(Location(name=loc_name))
     world.connect("Capital", "Province", travel_ticks=4)
     world.connect("Province", "Frontier", travel_ticks=6)
+    world.connect("Province", "Harbor", travel_ticks=4)
+    world.connect("Province", "Highlands", travel_ticks=7)
     world.connect("Capital", "Marches", travel_ticks=5)
     world.connect("Marches", "Borderlands", travel_ticks=5)
+    world.connect("Capital", "Lowlands", travel_ticks=4)
+    world.connect("Lowlands", "Rivergate", travel_ticks=4)
+    world.connect("Lowlands", "Old Road", travel_ticks=6)
 
     actors: dict[str, Actor] = {}
 
@@ -82,6 +103,36 @@ def build() -> tuple[World, dict[str, Actor]]:
         observe_every=4,
         decide_every=8,
     ))
+    # Harbor commander Brenn: capable, but pragmatic enough to bend numbers
+    # when failure could splash back on Mira.
+    add(Actor(
+        id="cmd_brenn",
+        display_name="Brenn of Karth",
+        title="Commander",
+        location="Harbor",
+        commander="gov_mira",
+        traits=Traits(competence=0.65, honesty=0.6, loyalty=0.45,
+                      fear=0.45, education=0.55, ambition=0.55),
+        stats={"garrison_strength": 900, "food_stores": 1400, "unrest": 28},
+        report_every=8,
+        observe_every=4,
+        decide_every=8,
+    ))
+    # Highland commander Kyra: nervous, loyal enough not to forge, but prone to
+    # fear-shaped reporting under pressure.
+    add(Actor(
+        id="cmd_kyra",
+        display_name="Kyra Stane",
+        title="Commander",
+        location="Highlands",
+        commander="gov_mira",
+        traits=Traits(competence=0.6, honesty=0.7, loyalty=0.65,
+                      fear=0.65, education=0.5, ambition=0.45),
+        stats={"garrison_strength": 700, "food_stores": 1100, "unrest": 35},
+        report_every=8,
+        observe_every=4,
+        decide_every=8,
+    ))
 
     # --- honest chain ----------------------------------------------------
     # Governor Cassia: loyal, honest, modest ambition. The foil to Mira.
@@ -108,6 +159,52 @@ def build() -> tuple[World, dict[str, Actor]]:
         traits=Traits(competence=0.7, honesty=0.8, loyalty=0.85,
                       fear=0.3, education=0.6, ambition=0.3),
         stats={"garrison_strength": 1500, "food_stores": 900, "unrest": 30},
+        report_every=8,
+        observe_every=4,
+        decide_every=8,
+    ))
+
+    # --- mixed chain -----------------------------------------------------
+    # Governor Neria: neither foil nor villain; gives the King a middle case
+    # with two commanders below her.
+    add(Actor(
+        id="gov_neria",
+        display_name="Neria of Vale",
+        title="Governor",
+        location="Lowlands",
+        commander="king",
+        traits=Traits(competence=0.7, honesty=0.7, loyalty=0.65,
+                      fear=0.25, education=0.7, ambition=0.5),
+        stats={"garrison_strength": 950, "food_stores": 2000, "unrest": 18},
+        report_every=12,
+        observe_every=6,
+        decide_every=10,
+    ))
+    # Commander Soren: steady and loyal, but less competent than Talen.
+    add(Actor(
+        id="cmd_soren",
+        display_name="Soren Deepwell",
+        title="Commander",
+        location="Rivergate",
+        commander="gov_neria",
+        traits=Traits(competence=0.55, honesty=0.8, loyalty=0.75,
+                      fear=0.35, education=0.45, ambition=0.35),
+        stats={"garrison_strength": 850, "food_stores": 1200, "unrest": 24},
+        report_every=8,
+        observe_every=4,
+        decide_every=8,
+    ))
+    # Commander Mael: ambitious and less loyal, the pressure point in Neria's
+    # otherwise moderate branch.
+    add(Actor(
+        id="cmd_mael",
+        display_name="Mael Rusk",
+        title="Commander",
+        location="Old Road",
+        commander="gov_neria",
+        traits=Traits(competence=0.7, honesty=0.55, loyalty=0.35,
+                      fear=0.55, education=0.5, ambition=0.75),
+        stats={"garrison_strength": 1000, "food_stores": 850, "unrest": 38},
         report_every=8,
         observe_every=4,
         decide_every=8,
@@ -200,7 +297,9 @@ def scripted_events(sim: Simulation) -> None:
     # corrupt chain
     sim.schedule_scripted(40.0,  lambda s: _bump(s, "Frontier",    "garrison_strength", -700, "raid"))
     sim.schedule_scripted(40.0,  lambda s: _bump(s, "Frontier",    "unrest", +30, "raid_aftermath"))
+    sim.schedule_scripted(50.0,  lambda s: _bump(s, "Harbor",      "food_stores", -500, "dock_fire"))
     sim.schedule_scripted(60.0,  lambda s: _bump(s, "Frontier",    "unrest", +25, "unrest_spike"))
+    sim.schedule_scripted(75.0,  lambda s: _bump(s, "Highlands",   "garrison_strength", -250, "bandit_raid"))
     sim.schedule_scripted(80.0,  lambda s: _bump(s, "Frontier",    "food_stores", -400, "supply_loss"))
     sim.schedule_scripted(140.0, lambda s: _bump(s, "Province",    "unrest", +30, "tax_riot"))
     # honest chain — staggered so the log stays legible
@@ -209,6 +308,11 @@ def scripted_events(sim: Simulation) -> None:
     sim.schedule_scripted(120.0, lambda s: _bump(s, "Borderlands", "food_stores", -350, "supply_loss"))
     sim.schedule_scripted(180.0, lambda s: _bump(s, "Borderlands", "unrest", +20, "unrest_spike"))
     sim.schedule_scripted(220.0, lambda s: _bump(s, "Marches",     "unrest", +20, "tax_riot"))
+    # mixed chain
+    sim.schedule_scripted(90.0,  lambda s: _bump(s, "Old Road",    "food_stores", -300, "convoy_loss"))
+    sim.schedule_scripted(110.0, lambda s: _bump(s, "Rivergate",   "unrest", +25, "flood_dispute"))
+    sim.schedule_scripted(160.0, lambda s: _bump(s, "Old Road",    "unrest", +20, "unrest_spike"))
+    sim.schedule_scripted(200.0, lambda s: _bump(s, "Lowlands",    "food_stores", -450, "bad_harvest"))
 
 
 def run(seed: int, ticks: int, runs_dir: Path) -> Path:

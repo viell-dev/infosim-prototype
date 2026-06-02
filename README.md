@@ -88,23 +88,33 @@ Outputs land in `runs/frontier-seed<N>-<timestamp>.{jsonl,log}`.
 
 ## What the scenario does (M1 + M2 + M3)
 
-`scenarios/frontier.py` wires **two parallel chains** under the same King:
+`scenarios/frontier.py` wires a **wide frontier hierarchy** under the same King:
 
 ```
-Capital  ──→ Province (Mira)   ──→ Frontier    (Aldric)   corrupt chain
-         └→ Marches  (Cassia)  ──→ Borderlands (Talen)    honest chain
+Capital  ──→ Province (Mira)   ──→ Frontier    (Aldric)   corrupt cluster
+         │                    ├─→ Harbor      (Brenn)
+         │                    └─→ Highlands   (Kyra)
+         ├→ Marches  (Cassia)  ──→ Borderlands (Talen)    honest chain
+         └→ Lowlands (Neria)   ──→ Rivergate   (Soren)    mixed chain
+                              └─→ Old Road    (Mael)
 ```
 
-Five named actors form the hierarchy:
+Ten named actors form the hierarchy:
 
 - **King Halric III** (Capital): high education, honest, low fear. Reports to no one.
 - **Governor Mira of Halen** (Province): moderate competence, somewhat dishonest, fearful, ambitious.
 - **Commander Aldric Vale** (Frontier): competent observer, but fearful of looking weak, *disloyal and ambitious* — the corruption engine.
+- **Commander Brenn of Karth** (Harbor): capable and pragmatic, with enough pressure to bend bad news.
+- **Commander Kyra Stane** (Highlands): loyal enough not to forge, but fear-shaped under pressure.
 - **Governor Cassia of Reach** (Marches): loyal, honest, modest ambition — the foil to Mira.
 - **Commander Talen Voss** (Borderlands): loyal, honest, moderately competent — the foil to Aldric.
+- **Governor Neria of Vale** (Lowlands): moderate middle case with two commanders below her.
+- **Commander Soren Deepwell** (Rivergate): steady and loyal, but less competent than Talen.
+- **Commander Mael Rusk** (Old Road): ambitious and less loyal, the weak point in Neria's branch.
 
-The two chains face comparable raid/unrest/supply shocks at staggered times so the King's
-final belief about Frontier vs. Borderlands is a direct comparison of *reporter integrity*.
+The three governors have one, two, and three direct commanders. Their regions face
+comparable raid/unrest/supply shocks at staggered times so the King's final belief
+can compare *reporter integrity* across branches with different widths.
 
 Each region tracks three true variables: `garrison_strength`, `food_stores`, and `unrest`. Each
 variable carries a **polarity** — for garrison and food, low values are bad news; for unrest,
@@ -224,6 +234,28 @@ they can be answered.
 ## Observations log
 
 Append-only. Add notes as the design evolves.
+
+### 2026-06-02 — Wide frontier topology: 1/2/3 commanders (GPT-5 via Codex)
+
+`scenarios/frontier.py` now has three governors with distinct direct-command
+widths:
+
+- Cassia keeps one commander: Talen at Borderlands.
+- New governor Neria has two commanders: Soren at Rivergate and Mael at Old Road.
+- Mira now has three commanders: Aldric at Frontier, Brenn at Harbor, and Kyra
+  at Highlands.
+
+The world graph adds Harbor, Highlands, Lowlands, Rivergate, and Old Road,
+with staggered shocks on the new commander posts so they generate reports,
+orders, and review pressure during ordinary runs instead of existing only as
+static map nodes. This widens the original sibling comparison while keeping
+the same King/Governor/Commander policy stack.
+
+Validation:
+
+- `python3 -m tests._runner` -> all 32 tests passed.
+- `PYTHONPATH=src python3 -m infosim.scenarios.frontier --seed 1 --ticks 80 --runs-dir /tmp/infosim-check`
+  wrote a frontier JSONL/log pair successfully.
 
 ### 2026-06-02 — M4-lite run map debug view (GPT-5 via Codex)
 
@@ -991,7 +1023,7 @@ src/infosim/
   sim.py              # Simulation: dispatches events, owns world+actors+bus+pool
   logging_setup.py    # JSONL + human dual-sink event log
   scenarios/
-    frontier.py       # two-chain scenario (corrupt vs honest) + CLI
+    frontier.py       # wide frontier scenario (1/2/3 commanders) + CLI
     deep_chain.py     # 4-level scenario validating arbitrary depth
 tools/
   inspect_run.py      # filter a JSONL run by actor / location / kind / subject / time range
