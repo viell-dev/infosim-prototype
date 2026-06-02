@@ -44,22 +44,34 @@ validated model to Rust later is straightforward if the concept holds.
 From the repo root:
 
 ```bash
-# default scenario, seed 1, 200 ticks
-PYTHONPATH=src python3 -m infosim.scenarios.frontier --seed 1 --ticks 200
+# list available recipes
+just
 
 # tests
-python3 tests/_runner.py
+just test
+
+# default frontier scenario, seed 1, 200 ticks
+just frontier
+
+# any supported scenario
+just run deep_chain 1 400
 
 # inspect a run
-python3 tools/inspect_run.py runs/frontier-seed1-*.jsonl --kind dispatch
-python3 tools/inspect_run.py runs/frontier-seed1-*.jsonl --region Frontier
+just inspect-kind runs/frontier-seed1-20260602-220543.jsonl dispatch
+just inspect-region runs/frontier-seed1-20260602-220543.jsonl Frontier
 
 # generate a plain HTML debug map for a run
-python3 tools/map_run.py runs/frontier-seed1-20260602-220543.jsonl
+just map runs/frontier-seed1-20260602-220543.jsonl
+
+# aggregate experiments
+just sweep 100 300
+just stress 50 300
 ```
 
 Outputs land in `runs/frontier-seed<N>-<timestamp>.{jsonl,log}`.
-`tools/map_run.py` writes a sibling `*-map.html` file next to the JSONL input.
+`just run`, `just frontier`, and `just deep-chain` print the generated JSONL
+and log filenames as full paths. `just map` writes a sibling `*-map.html` file
+next to the JSONL input and prints the full HTML path.
 
 ---
 
@@ -235,6 +247,24 @@ they can be answered.
 
 Append-only. Add notes as the design evolves.
 
+### 2026-06-02 — Just command wrapper (GPT-5 via Codex)
+
+Added a repo-level `justfile` so common workflows use short, stable commands:
+`just frontier`, `just run <scenario>`, `just map <run.jsonl>`, `just test`,
+`just check`, `just inspect-*`, `just sweep`, and `just stress`. The README's
+run examples now point at those recipes instead of spelling out `PYTHONPATH`
+and script paths directly. The run and map recipes print their generated output
+filenames as full paths so the next artifact to open is unambiguous.
+
+Validation:
+
+- `just --list` showed the expected recipes.
+- `just test` -> all 32 tests passed.
+- `just frontier 1 10 /tmp/infosim-just-check-paths` printed full JSONL/log paths.
+- `just map /tmp/infosim-just-check-paths/frontier-seed1-20260602-224741.jsonl`
+  printed the full HTML map path.
+- `just deep-chain 1 10 /tmp/infosim-just-check-paths` printed full JSONL/log paths.
+
 ### 2026-06-02 — Wide frontier topology: 1/2/3 commanders (GPT-5 via Codex)
 
 `scenarios/frontier.py` now has three governors with distinct direct-command
@@ -253,14 +283,14 @@ the same King/Governor/Commander policy stack.
 
 Validation:
 
-- `python3 -m tests._runner` -> all 32 tests passed.
-- `PYTHONPATH=src python3 -m infosim.scenarios.frontier --seed 1 --ticks 80 --runs-dir /tmp/infosim-check`
+- `just test` -> all 32 tests passed.
+- `just frontier 1 80 /tmp/infosim-check`
   wrote a frontier JSONL/log pair successfully.
 
 ### 2026-06-02 — M4-lite run map debug view (GPT-5 via Codex)
 
 Built a deliberately simple HTML debug map generator:
-`tools/map_run.py <run.jsonl>`. It writes `<run>-map.html` next to the
+`just map <run.jsonl>`. It writes `<run>-map.html` next to the
 JSONL file and samples the run at five fixed checkpoints: start, 25%,
 50%, 75%, and end. Each checkpoint renders the active hierarchy as a
 nested tree, using the current `commander` links so subordinates remain
@@ -317,8 +347,7 @@ older local experiments can still import the old names.
 The tests were migrated to import the new purpose-specific modules rather
 than the facade, which makes the split itself part of what the suite
 checks. Behavior should be unchanged; the validation run passed 31/31 via
-`python3 tests/_runner.py`, and `python3 -m compileall -q src tests`
-also passed.
+`just test`, and `just check` also passed.
 
 ### 2026-06-02 — Structure review after INFO_REQUEST/deep-chain work (GPT-5 via Codex)
 
@@ -334,7 +363,7 @@ sibling topology → stress tooling → INFO_REQUESTs → deep-chain
 validation. The code is small enough to reason about directly: core
 engine in `src/infosim/`, scenarios in `src/infosim/scenarios/`,
 analysis helpers in `tools/`, and focused stdlib tests in `tests/`.
-The test suite passed: 31/31 via `python3 tests/_runner.py`.
+The test suite passed: 31/31 via `just test`.
 
 Major structural notes:
 
