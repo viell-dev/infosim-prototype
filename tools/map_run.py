@@ -479,6 +479,20 @@ h2 {{ margin: 0 0 10px; font-size: 18px; }}
   font-size: 12px;
   margin-bottom: 4px;
 }}
+.help {{
+  border: 1px solid #bbb;
+  margin: 12px 0 14px;
+  padding: 8px 10px;
+  max-width: 980px;
+}}
+.help h2 {{
+  margin: 0 0 6px;
+  font-size: 16px;
+}}
+.help ul {{
+  margin: 0;
+  padding-left: 20px;
+}}
 .children {{
   margin-left: 24px;
   padding-left: 10px;
@@ -505,6 +519,20 @@ td {{ width: 26%; }}
 <header>
   <h1>InfoSim Run Map</h1>
   <div class="source">{html.escape(str(source_path))}</div>
+  <section class="help">
+    <h2>How to read this</h2>
+    <ul>
+      <li>Each block is a checkpoint sampled from the run: start, 25%, 50%, 75%, and end.</li>
+      <li>Actors are nested by the active commander tree at that checkpoint.</li>
+      <li><strong>Real</strong> is the replayed authoritative resource/stat value on that actor.</li>
+      <li><strong>Self known</strong> is that actor's latest belief about their own stat.</li>
+      <li><strong>King known</strong> is the King's latest belief about that actor's stat.</li>
+      <li><strong>c</strong> is confidence, from 0 to 1. Higher means more trusted/clear.</li>
+      <li><strong>t</strong> is the simulation time when that belief was last updated.</li>
+      <li><strong>via</strong> is the source chain the King's belief traveled through.</li>
+      <li><strong>Office</strong> shows replacements at the same position, for example A -&gt; B.</li>
+    </ul>
+  </section>
 </header>
 <main class="wrap">
 {''.join(blocks)}

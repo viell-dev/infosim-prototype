@@ -27,5 +27,8 @@ def test_map_run_renders_checkpoints_and_replacement_lineage(tmp_path) -> None:
     ]
     assert "Self known" in html
     assert "King known" in html
+    assert "c</strong> is confidence" in html
+    assert "t</strong> is the simulation time" in html
+    assert "via</strong> is the source chain" in html
     assert "Aldric Vale" in html
     assert "Office: Mira of Halen -&gt; Iselle Marn" in html
