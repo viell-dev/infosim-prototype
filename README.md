@@ -53,9 +53,13 @@ python3 tests/_runner.py
 # inspect a run
 python3 tools/inspect_run.py runs/frontier-seed1-*.jsonl --kind dispatch
 python3 tools/inspect_run.py runs/frontier-seed1-*.jsonl --region Frontier
+
+# generate a plain HTML debug map for a run
+python3 tools/map_run.py runs/frontier-seed1-20260602-220543.jsonl
 ```
 
 Outputs land in `runs/frontier-seed<N>-<timestamp>.{jsonl,log}`.
+`tools/map_run.py` writes a sibling `*-map.html` file next to the JSONL input.
 
 ---
 
@@ -75,7 +79,10 @@ Outputs land in `runs/frontier-seed<N>-<timestamp>.{jsonl,log}`.
   `orders.py`, `scheduler.py`, `world.py`, and `personnel.py` are focused
   data / mechanics modules used by the engine and policies.
 - `src/infosim/scenarios/` wires concrete worlds and actors; `tools/` contains
-  analysis helpers; `tests/` mirrors the purpose-specific behavior under test.
+  analysis helpers. `tools/inspect_run.py` filters raw JSONL events, and
+  `tools/map_run.py` replays a run into a plain HTML debug map sampled at
+  start / 25% / 50% / 75% / end. `tests/` mirrors the purpose-specific
+  behavior under test.
 
 ---
 
@@ -217,6 +224,54 @@ they can be answered.
 ## Observations log
 
 Append-only. Add notes as the design evolves.
+
+### 2026-06-02 — M4-lite run map debug view (GPT-5 via Codex)
+
+Built a deliberately simple HTML debug map generator:
+`tools/map_run.py <run.jsonl>`. It writes `<run>-map.html` next to the
+JSONL file and samples the run at five fixed checkpoints: start, 25%,
+50%, 75%, and end. Each checkpoint renders the active hierarchy as a
+nested tree, using the current `commander` links so subordinates remain
+visually under the office holder they report to at that time.
+
+Each actor block shows one row per stat from `world.STATS`:
+
+- **Real**: the replayed authoritative stat value on that actor.
+- **Self known**: that actor's current belief about their own stat, from
+  observation events.
+- **King known**: the King's current belief about that actor's stat,
+  including confidence, last update time, and the belief source chain.
+
+The map is a replay of the JSONL stream, not a live simulator view. It
+reconstructs state from the scenario's initial `build()` output plus
+structured events: `observation`, `receive`, `true_state_change`,
+`response_integrated`, `skim`, `action_started`, `action_completed`,
+`dismissed`, and `appointed`. It currently auto-detects the `frontier`
+and `deep_chain` scenarios from run filenames, with `--scenario` as an
+override.
+
+Office changes are tracked explicitly. `dismissed` and `appointed`
+events now include structured `display_name`, `title`, `commander`, and
+`stats` fields, so the map can show lineage such as
+`Mira of Halen -> Iselle Marn` without parsing human log prose. On
+appointment, the replay rewires the dismissed actor's active
+subordinates to the replacement, matching `review._dismiss_and_replace`.
+`response_integrated` events also now include the returned answer values
+and confidences, so audit responses are reflected in replayed known
+state rather than only in the live simulation object.
+
+This is intentionally **not** full M4. It does not step every event, show
+message queues, expose order/action timelines, or provide interaction
+beyond opening a static HTML file. Its purpose is only to make a run's
+broad institutional shape readable at a glance.
+
+Validation: generated a seed-1, 200-tick Frontier run and produced
+`runs/frontier-seed1-20260602-220543-map.html`. The debug map showed the
+five checkpoints, the nested King -> Governor -> Commander hierarchy,
+the Province office handoff `Mira of Halen -> Iselle Marn`, and the
+expected divergence around Aldric's real vs. King-known Frontier stats.
+Added `tests/test_run_map.py` so the checkpoint labels, known-state
+columns, nested actor content, and replacement lineage stay covered.
 
 ### 2026-06-02 — Policy module split (GPT-5 via Codex)
 

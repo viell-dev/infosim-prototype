@@ -350,8 +350,13 @@ def handle_info_response(
         f"INFO_RESPONSE #{response.correlation_id}: {len(response.answers)} subjects updated "
         f"(via {sender_actor_id})",
         actor=recipient.id,
+        sender=sender_actor_id,
         correlation_id=response.correlation_id,
         n_answers=len(response.answers),
+        answers={
+            subject: {"value": value, "confidence": conf}
+            for subject, (value, conf) in response.answers.items()
+        },
     )
 
 

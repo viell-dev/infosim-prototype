@@ -60,9 +60,12 @@ def appoint(
         actor=new_id,
         location=location,
         title=title,
+        display_name=display_name,
+        commander=commander,
         competence=traits.competence,
         honesty=traits.honesty,
         loyalty=traits.loyalty,
+        stats=dict(actor.stats),
     )
     return actor
 
@@ -82,8 +85,12 @@ def dismiss(sim: "Simulation", actor_id: str, reason: str) -> Actor | None:
         f"[{actor.location}] {actor.title} {actor.display_name} dismissed: {reason}",
         actor=actor_id,
         location=actor.location,
+        title=actor.title,
+        display_name=actor.display_name,
+        commander=actor.commander,
         reason=reason,
         tenure_time=sim.now - actor.tenure_start_time,
+        stats=dict(actor.stats),
     )
     # Wipe any belief the King held that came through this person — institutional
     # memory dies with the office holder. Beliefs whose source_chain ends with the
