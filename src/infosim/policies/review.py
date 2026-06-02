@@ -35,9 +35,9 @@ def _chain_health(sim: "Simulation", king: "Actor", sub: "Actor") -> float | Non
     score = 0.0
     saw_any = False
     for actor_id in _chain_actors(sim, sub):
-        g = king.known.get(sim.subject_for(actor_id, "garrison_strength"))
-        f = king.known.get(sim.subject_for(actor_id, "food_stores"))
-        u = king.known.get(sim.subject_for(actor_id, "unrest"))
+        g = king.known.get(sim.subject_for(actor_id, sim.defense_stat))
+        f = king.known.get(sim.subject_for(actor_id, sim.supply_stat))
+        u = king.known.get(sim.subject_for(actor_id, sim.threat_stat))
         if g is None and f is None and u is None:
             continue
         saw_any = True
@@ -89,14 +89,14 @@ def _review_subordinate(sim: "Simulation", king: "Actor", sub: "Actor") -> None:
         # Single-sub fallback — absolute thresholds.
         bad_now = False
         for actor_id in _chain_actors(sim, sub):
-            unrest = king.known.get(sim.subject_for(actor_id, "unrest"))
-            if unrest and unrest.value > KING_REVIEW_UNREST:
+            unrest = king.known.get(sim.subject_for(actor_id, sim.threat_stat))
+            if unrest and unrest.value > max(KING_REVIEW_UNREST, sim.apex_high_threat):
                 bad_now = True
-                reason = f"high believed unrest at {actor_id}"
-            garrison = king.known.get(sim.subject_for(actor_id, "garrison_strength"))
-            if garrison and garrison.value < KING_REVIEW_GARRISON:
+                reason = f"high believed {sim.threat_stat} at {actor_id}"
+            garrison = king.known.get(sim.subject_for(actor_id, sim.defense_stat))
+            if garrison and garrison.value < min(KING_REVIEW_GARRISON, sim.apex_low_defense):
                 bad_now = True
-                reason = f"low believed garrison at {actor_id}"
+                reason = f"low believed {sim.defense_stat} at {actor_id}"
 
     prev = king.strikes.get(sub.id, 0)
     new = prev + 1 if bad_now else 0

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ..actions import suppress_unrest
+from ..actions import move_actor, suppress_unrest, transfer_stat
 from ..orders import OrderKind
 from .constants import (
     CMD_LOW_FOOD,
@@ -54,10 +54,10 @@ def _maybe_reinforce(
     routed_via: "Actor",
     target_actor: str,
 ) -> None:
-    belief = king.known.get(sim.subject_for(target_actor, "garrison_strength"))
-    if not belief or belief.value >= KING_LOW_GARRISON:
+    belief = king.known.get(sim.subject_for(target_actor, sim.defense_stat))
+    if not belief or belief.value >= sim.apex_low_defense:
         return
-    magnitude = (KING_LOW_GARRISON - belief.value) * 0.6
+    magnitude = (sim.apex_low_defense - belief.value) * 0.6
     _dispatch_order(sim, king, routed_via, OrderKind.REINFORCE, target_actor,
                     magnitude=magnitude, priority=2)
 
@@ -68,8 +68,8 @@ def _maybe_suppress(
     routed_via: "Actor",
     target_actor: str,
 ) -> None:
-    belief = king.known.get(sim.subject_for(target_actor, "unrest"))
-    if not belief or belief.value <= KING_HIGH_UNREST:
+    belief = king.known.get(sim.subject_for(target_actor, sim.threat_stat))
+    if not belief or belief.value <= sim.apex_high_threat:
         return
     _dispatch_order(sim, king, routed_via, OrderKind.SUPPRESS_UNREST, target_actor,
                     magnitude=belief.value, priority=2)
@@ -81,10 +81,10 @@ def _maybe_send_supplies(
     routed_via: "Actor",
     target_actor: str,
 ) -> None:
-    belief = king.known.get(sim.subject_for(target_actor, "food_stores"))
-    if not belief or belief.value >= KING_LOW_FOOD:
+    belief = king.known.get(sim.subject_for(target_actor, sim.supply_stat))
+    if not belief or belief.value >= sim.apex_low_supply:
         return
-    magnitude = (KING_LOW_FOOD - belief.value) * 0.8
+    magnitude = (sim.apex_low_supply - belief.value) * 0.8
     _dispatch_order(sim, king, routed_via, OrderKind.SEND_SUPPLIES, target_actor,
                     magnitude=magnitude, priority=1)
 
@@ -108,8 +108,8 @@ def decide_governor(sim: "Simulation", actor: "Actor") -> None:
         _handle_middle_order(sim, actor, order)
 
     # autonomous suppression if local unrest belief is severe
-    own_unrest = actor.known.get(sim.subject_for(actor.id, "unrest"))
-    if own_unrest and own_unrest.value > GOV_AUTONOMOUS_UNREST:
+    own_unrest = actor.known.get(sim.subject_for(actor.id, sim.threat_stat))
+    if own_unrest and own_unrest.value > sim.middle_autonomous_threat:
         sim.event_log.emit(
             sim.now,
             "autonomous_action",
@@ -148,6 +148,10 @@ def decide_commander(sim: "Simulation", actor: "Actor") -> None:
                 duration=SUPPRESS_DURATION,
                 competence=actor.traits.competence, rng=sim.rng,
             )
+        elif order.kind == OrderKind.DEFEND_LOCATION and order.target_actor == actor.id:
+            _defend_current_location(sim, actor)
+        elif order.kind == OrderKind.MOVE_TO_LOCATION and order.target_location is not None:
+            move_actor(sim, actor.id, order.target_location, order.assigned_commander)
         # REINFORCE / SEND_SUPPLIES targeted at the commander are handled by
         # the governor (who has the stockpile); commander just waits.
 
@@ -158,17 +162,144 @@ def decide_commander(sim: "Simulation", actor: "Actor") -> None:
     if superior is None:
         return
 
-    own_food = actor.known.get(sim.subject_for(actor.id, "food_stores"))
-    if own_food and own_food.value < CMD_LOW_FOOD:
+    own_food = actor.known.get(sim.subject_for(actor.id, sim.supply_stat))
+    if own_food and own_food.value < sim.leaf_low_supply:
         _emit_urgent_report(
-            sim, actor, superior, own_food.value, "food_stores", own_food.confidence,
+            sim, actor, superior, own_food.value, sim.supply_stat, own_food.confidence,
         )
 
-    own_garrison = actor.known.get(sim.subject_for(actor.id, "garrison_strength"))
-    if own_garrison and own_garrison.value < CMD_LOW_GARRISON:
+    own_garrison = actor.known.get(sim.subject_for(actor.id, sim.defense_stat))
+    if own_garrison and own_garrison.value < sim.leaf_low_defense:
         _emit_urgent_report(
-            sim, actor, superior, own_garrison.value, "garrison_strength", own_garrison.confidence,
+            sim, actor, superior, own_garrison.value, sim.defense_stat, own_garrison.confidence,
         )
+
+    if actor.stats.get(sim.threat_stat, 0.0) > 0 and actor.stats.get(sim.defense_stat, 0.0) > 0:
+        _defend_current_location(sim, actor)
+
+
+def decide_captain(sim: "Simulation", actor: "Actor") -> None:
+    """Captain: mine ore from infinite sources and pay a portion upward."""
+    _maybe_skim(sim, actor)
+    ships = actor.stats.get("ships", actor.stats.get(sim.defense_stat, 0.0))
+    mined = max(0.0, ships * 18.0 * (0.5 + actor.traits.competence))
+    before = actor.stats.get("ore", 0.0)
+    actor.stats["ore"] = before + mined
+    sim.event_log.emit(
+        sim.now,
+        "mining",
+        f"[{actor.location}] {actor.title} {actor.display_name} mines {mined:.0f} ore "
+        f"with {ships:.0f} ships (ore {before:.0f} → {actor.stats['ore']:.0f})",
+        actor=actor.id,
+        location=actor.location,
+        ships=ships,
+        amount=mined,
+    )
+    _pay_tax_upward(sim, actor, fraction=0.25, label="ore_tax")
+
+
+def decide_manager(sim: "Simulation", actor: "Actor") -> None:
+    decide_governor(sim, actor)
+    _consume_ore(sim, actor)
+    _pay_tax_upward(sim, actor, fraction=0.10, label="manager_tax")
+    _order_local_defense(sim, actor)
+
+
+def decide_ceo(sim: "Simulation", actor: "Actor") -> None:
+    decide_king(sim, actor)
+    for sub in _subordinates(sim, actor):
+        for defender in [sub, *_subordinates(sim, sub)]:
+            if defender.title != "Commander":
+                continue
+            threat = actor.known.get(sim.subject_for(defender.id, sim.threat_stat))
+            if threat and threat.value > sim.apex_high_threat:
+                _dispatch_order(
+                    sim, actor, sub if defender.commander != actor.id else defender,
+                    OrderKind.DEFEND_LOCATION, defender.id,
+                    magnitude=threat.value, priority=3,
+                )
+
+
+def _consume_ore(sim: "Simulation", actor: "Actor") -> None:
+    population = actor.stats.get("population", 0.0)
+    if population <= 0:
+        return
+    before = actor.stats.get("ore", 0.0)
+    consumed = min(before, population * 0.08)
+    actor.stats["ore"] = before - consumed
+    sim.event_log.emit(
+        sim.now,
+        "consumption",
+        f"[{actor.location}] {actor.title} {actor.display_name} consumes {consumed:.0f} ore "
+        f"for {population:.0f} population (ore {before:.0f} → {actor.stats['ore']:.0f})",
+        actor=actor.id,
+        location=actor.location,
+        population=population,
+        amount=consumed,
+    )
+
+
+def _pay_tax_upward(sim: "Simulation", actor: "Actor", fraction: float, label: str) -> None:
+    if actor.commander is None:
+        return
+    superior = sim.actors.get(actor.commander)
+    if superior is None:
+        return
+    available = actor.stats.get("ore", 0.0)
+    amount = available * fraction
+    if amount <= 0:
+        return
+    transfer_stat(sim, actor.id, actor.id, superior.id, "ore", amount, "ore", label)
+
+
+def _order_local_defense(sim: "Simulation", actor: "Actor") -> None:
+    threat = actor.stats.get(sim.threat_stat, 0.0)
+    if threat <= sim.middle_autonomous_threat:
+        return
+    defenders = [
+        s for s in _subordinates(sim, actor)
+        if s.title == "Commander" and s.stats.get(sim.defense_stat, 0.0) > 0
+    ]
+    if not defenders:
+        return
+    defender = max(defenders, key=lambda a: a.stats.get(sim.defense_stat, 0.0))
+    if defender.location != actor.location:
+        _dispatch_order(
+            sim, actor, defender, OrderKind.MOVE_TO_LOCATION, defender.id,
+            magnitude=0.0, priority=3, target_location=actor.location,
+            assigned_commander=actor.id,
+        )
+        return
+    _dispatch_order(
+        sim, actor, defender, OrderKind.DEFEND_LOCATION, defender.id,
+        magnitude=threat, priority=3,
+    )
+
+
+def _defend_current_location(sim: "Simulation", actor: "Actor") -> None:
+    holders = [a for a in sim.actors.values() if a.location == actor.location]
+    targets = [a for a in holders if a.stats.get(sim.threat_stat, 0.0) > 0]
+    if not targets:
+        return
+    target = max(targets, key=lambda a: a.stats.get(sim.threat_stat, 0.0))
+    before = target.stats.get(sim.threat_stat, 0.0)
+    ships = actor.stats.get(sim.defense_stat, 0.0)
+    reduction = min(before, ships * (4.0 + 8.0 * actor.traits.competence))
+    if reduction <= 0:
+        return
+    target.stats[sim.threat_stat] = before - reduction
+    sim.event_log.emit(
+        sim.now,
+        "defense",
+        f"[{actor.location}] {actor.title} {actor.display_name} defends with {ships:.0f} ships: "
+        f"{sim.threat_stat} {before:.0f} → {target.stats[sim.threat_stat]:.0f}",
+        actor=actor.id,
+        target_actor=target.id,
+        location=actor.location,
+        ships=ships,
+        before=before,
+        after=target.stats[sim.threat_stat],
+    )
 
 
 def _emit_urgent_report(
@@ -217,8 +348,11 @@ def _emit_urgent_report(
 # --- dispatch -----------------------------------------------------------------
 POLICY_BY_TITLE = {
     "King": decide_king,
+    "CEO": decide_ceo,
     "Governor": decide_governor,
+    "Manager": decide_manager,
     "Commander": decide_commander,
+    "Captain": decide_captain,
 }
 
 

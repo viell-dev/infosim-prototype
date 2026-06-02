@@ -56,6 +56,9 @@ just frontier
 # any supported scenario
 just run deep_chain 1 400
 
+# space-miner scenario, seed 1, 500 ticks by default
+just space-miner
+
 # inspect a run
 just inspect-kind runs/frontier-seed1-20260602-220543.jsonl dispatch
 just inspect-region runs/frontier-seed1-20260602-220543.jsonl Frontier
@@ -71,8 +74,8 @@ just sweep 100 300
 just stress 50 300
 ```
 
-Outputs land in `runs/frontier-seed<N>-<timestamp>.{jsonl,log}`.
-`just run`, `just frontier`, and `just deep-chain` print the generated JSONL
+Outputs land in `runs/<scenario>-seed<N>-<timestamp>.{jsonl,log}`.
+`just run`, `just frontier`, `just deep-chain`, and `just space-miner` print the generated JSONL
 and log filenames as full paths. `just map` writes a sibling `*-map.html` file
 for the latest `runs/*.jsonl` by default and prints the full HTML path. Pass a
 JSONL path to map a specific run.
@@ -84,7 +87,7 @@ JSONL path to map a specific run.
 - `src/infosim/sim.py` is the discrete-event engine: scheduling, actor cadences,
   message arrival handling, observations, and pushed reports.
 - `src/infosim/policies/` holds decision and political behavior:
-  `roles.py` dispatches King / Governor / Commander decisions, `orders.py`
+  `roles.py` dispatches King / Governor / Commander and CEO / Manager / Captain decisions, `orders.py`
   routes and executes downward orders, `info_requests.py` owns the pull-based
   request / response path, `review.py` handles strikes and replacement,
   `corruption.py` handles skimming, and `constants.py` keeps the current
@@ -250,6 +253,35 @@ they can be answered.
 ## Observations log
 
 Append-only. Add notes as the design evolves.
+
+### 2026-06-02 — Space-miner scenario and free-agent commanders (GPT-5 via Codex)
+
+Added `scenarios/space_miner.py`, a setting swap that keeps the same delayed
+information and delegated authority model but renames the hierarchy to
+CEO → Manager → Captain, with Commanders as mobile military free agents.
+Scenario-specific stat roles let `ships`, `ore`, and `alien_presence` exercise
+the same policy machinery that frontier uses for garrison, food, and unrest.
+
+New mechanics:
+
+- `MOVE_TO_LOCATION` and `DEFEND_LOCATION` orders let Commanders move between
+  stations and change superior on arrival.
+- Captains mine ore from infinite sources; their `ships` stat scales mining
+  output.
+- Captains pay ore tax upward to Managers, Managers pay a smaller tax upward
+  to the CEO, and Managers consume ore based on local population.
+- Periodic alien contacts create warning windows before larger swarms, giving
+  the order-delay system time to shuffle Commanders for defence.
+
+Validation:
+
+- `just check` passes all 34 tests.
+- `just space-miner 1 500 runs` wrote
+  `runs/space_miner-seed1-20260602-232220.{jsonl,log}`.
+- In that sample, Commander Orion moves Homeworld → Ceres under `mgr_ceres`
+  at t=101, Ceres → Europa under `mgr_europa` at t=182, then Europa →
+  Homeworld under the CEO at t=208. Defence events reduce Ceres and Europa
+  alien pressure to zero after the warning / swarm contacts.
 
 ### 2026-06-02 — Map vacant-office replay fix (GPT-5 via Codex)
 
@@ -1083,6 +1115,7 @@ src/infosim/
   scenarios/
     frontier.py       # wide frontier scenario (1/2/3 commanders) + CLI
     deep_chain.py     # 4-level scenario validating arbitrary depth
+    space_miner.py    # CEO/Manager/Captain economy with mobile Commanders
 tools/
   inspect_run.py      # filter a JSONL run by actor / location / kind / subject / time range
   sweep.py            # multi-seed aggregation

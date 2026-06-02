@@ -27,7 +27,7 @@ def _maybe_skim(sim: "Simulation", actor: "Actor") -> None:
         return
     if actor.traits.ambition < SKIM_AMBITION_THRESHOLD:
         return
-    available = actor.stats.get("food_stores", 0.0)
+    available = actor.stats.get(sim.supply_stat, 0.0)
     if available <= 0:
         return
 
@@ -44,12 +44,12 @@ def _maybe_skim(sim: "Simulation", actor: "Actor") -> None:
     take = min(available, available * frac)
     if take <= 0:
         return
-    actor.stats["food_stores"] = available - take
+    actor.stats[sim.supply_stat] = available - take
     sim.event_log.emit(
         sim.now,
         "skim",
-        f"[{actor.location}] {actor.title} {actor.display_name} skims {take:.0f} food "
-        f"(stores {available:.0f} → {actor.stats['food_stores']:.0f})",
+        f"[{actor.location}] {actor.title} {actor.display_name} skims {take:.0f} "
+        f"{sim.supply_stat} ({available:.0f} → {actor.stats[sim.supply_stat]:.0f})",
         actor=actor.id,
         location=actor.location,
         amount=take,

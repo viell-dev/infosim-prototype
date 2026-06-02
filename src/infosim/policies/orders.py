@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ..actions import send_supplies, suppress_unrest, transfer_garrison
+from ..actions import move_actor, send_supplies, suppress_unrest, transfer_garrison
 from ..orders import Order, OrderKind
 from .constants import SUPPRESS_DURATION
 from .hierarchy import _route_to_subordinate, _subordinates
@@ -21,6 +21,8 @@ def _dispatch_order(
     magnitude: float,
     deadline_offset: int = 60,
     priority: int = 1,
+    target_location: str | None = None,
+    assigned_commander: str | None = None,
 ) -> None:
     travel = sim.world.travel_ticks(issuer.location, recipient.location)
     order = Order(
@@ -33,6 +35,8 @@ def _dispatch_order(
         issued_time=sim.now,
         deadline_time=sim.now + deadline_offset,
         priority=priority,
+        target_location=target_location,
+        assigned_commander=assigned_commander,
     )
     msg = sim.bus.dispatch_order(
         sender_actor=issuer.id,
@@ -54,6 +58,8 @@ def _dispatch_order(
         recipient=recipient.id,
         order_kind=kind.value,
         target_actor=target_actor,
+        target_location=target_location,
+        assigned_commander=assigned_commander,
         magnitude=magnitude,
         eta_time=msg.eta_time,
     )
@@ -78,6 +84,8 @@ def _handle_middle_order(sim: "Simulation", actor: "Actor", order: "Order") -> N
                 duration=SUPPRESS_DURATION,
                 competence=actor.traits.competence, rng=sim.rng,
             )
+        elif order.kind is OrderKind.MOVE_TO_LOCATION and order.target_location is not None:
+            move_actor(sim, actor.id, order.target_location, order.assigned_commander)
         # REINFORCE / SEND_SUPPLIES targeted at self are a no-op - the
         # actor would be transferring from themselves to themselves.
         return
@@ -103,6 +111,14 @@ def _handle_middle_order(sim: "Simulation", actor: "Actor", order: "Order") -> N
                 target_actor=direct_sub.id,
                 magnitude=order.magnitude, priority=order.priority,
             )
+        elif order.kind in (OrderKind.MOVE_TO_LOCATION, OrderKind.DEFEND_LOCATION):
+            _dispatch_order(
+                sim, actor, direct_sub, order.kind,
+                target_actor=direct_sub.id,
+                magnitude=order.magnitude, priority=order.priority,
+                target_location=order.target_location,
+                assigned_commander=order.assigned_commander,
+            )
         return
 
     # Deeper target - forward to the direct sub on the path.
@@ -119,4 +135,6 @@ def _handle_middle_order(sim: "Simulation", actor: "Actor", order: "Order") -> N
         sim, actor, routed_via, order.kind,
         target_actor=order.target_actor,
         magnitude=order.magnitude, priority=order.priority,
+        target_location=order.target_location,
+        assigned_commander=order.assigned_commander,
     )

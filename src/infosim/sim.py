@@ -49,6 +49,23 @@ class Simulation:
     # ergonomic.
     bus_loss_prob: float = 0.05
     bus_jitter_frac: float = 0.2
+    defense_stat: str = "garrison_strength"
+    supply_stat: str = "food_stores"
+    threat_stat: str = "unrest"
+    apex_low_defense: float = 1000.0
+    apex_low_supply: float = 800.0
+    apex_high_threat: float = 50.0
+    middle_autonomous_threat: float = 75.0
+    leaf_low_supply: float = 500.0
+    leaf_low_defense: float = 600.0
+    bad_news_thresholds: dict[str, float] = field(default_factory=lambda: {
+        "garrison_strength": 1000.0,
+        "food_stores": 1000.0,
+        "unrest": 20.0,
+        "ships": 8.0,
+        "ore": 500.0,
+        "alien_presence": 20.0,
+    })
 
     def __post_init__(self) -> None:
         self.bus = MessageBus(
@@ -225,9 +242,10 @@ class Simulation:
             if actor.traits.loyalty < FORGERY_THRESHOLD:
                 stat = subject.split(".", 1)[1]
                 polarity = VARIABLES[stat].polarity
-                is_bad_news = (
-                    (polarity == +1 and belief.value < 1000.0) or
-                    (polarity == -1 and belief.value > 20.0)
+                threshold = self.bad_news_thresholds.get(stat)
+                is_bad_news = threshold is not None and (
+                    (polarity == +1 and belief.value < threshold) or
+                    (polarity == -1 and belief.value > threshold)
                 )
                 # Smooth probability — (1 - loyalty)^2 means mildly disloyal
                 # actors lie occasionally rather than never; deeply disloyal

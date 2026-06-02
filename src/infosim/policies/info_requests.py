@@ -368,7 +368,7 @@ def maybe_initiate_audit(sim: "Simulation", king: "Actor", sub: "Actor", deeper:
     # subjects this audit would cover.
     targets = [
         sim.subject_for(deeper.id, s)
-        for s in ("garrison_strength", "food_stores", "unrest")
+        for s in (sim.defense_stat, sim.supply_stat, sim.threat_stat)
     ]
     already_pending = any(
         any(s in p.subjects for s in targets)

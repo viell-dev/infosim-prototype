@@ -8,8 +8,8 @@ class StatSpec:
     """Metadata for a stat tracked on actors.
 
     polarity:
-      +1 — higher values are "good news" (garrison_strength, food_stores)
-      -1 — higher values are "bad news" (unrest)
+      +1 — higher values are "good news" (garrison_strength, food_stores, ships, ore)
+      -1 — higher values are "bad news" (unrest, alien_presence)
 
     Fear bias uses polarity to push reports in the comforting direction.
     """
@@ -22,6 +22,10 @@ STATS: dict[str, StatSpec] = {
     "garrison_strength": StatSpec("garrison_strength", polarity=+1),
     "food_stores":       StatSpec("food_stores",       polarity=+1),
     "unrest":            StatSpec("unrest",            polarity=-1),
+    "ships":             StatSpec("ships",             polarity=+1),
+    "ore":               StatSpec("ore",               polarity=+1),
+    "population":        StatSpec("population",        polarity=+1),
+    "alien_presence":    StatSpec("alien_presence",    polarity=-1),
 }
 # Backwards-compatible alias used in older references.
 VARIABLES = STATS
@@ -58,6 +62,8 @@ class World:
         self.edges[b][a] = travel_ticks
 
     def travel_ticks(self, a: str, b: str) -> int:
+        if a == b:
+            return 0
         return self.edges[a][b]
 
 

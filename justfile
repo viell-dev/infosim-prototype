@@ -12,7 +12,7 @@ test:
 check: test
     @python3 -m compileall -q src tests tools
 
-# Run a scenario: scenario can be "frontier", "deep_chain", or "deepchain".
+# Run a scenario: scenario can be "frontier", "deep_chain", "deepchain", or "space_miner".
 run scenario="frontier" seed="1" ticks="200" runs_dir="runs":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -22,6 +22,9 @@ run scenario="frontier" seed="1" ticks="200" runs_dir="runs":
             ;;
         deep_chain|deepchain)
             module="infosim.scenarios.deep_chain"
+            ;;
+        space_miner|spaceminer)
+            module="infosim.scenarios.space_miner"
             ;;
         *)
             echo "Unknown scenario: {{scenario}}" >&2
@@ -42,6 +45,10 @@ frontier seed="1" ticks="200" runs_dir="runs":
 # Run the deep-chain scenario.
 deep-chain seed="1" ticks="400" runs_dir="runs":
     @just run deep_chain "{{seed}}" "{{ticks}}" "{{runs_dir}}"
+
+# Run the space-miner scenario.
+space-miner seed="1" ticks="500" runs_dir="runs":
+    @just run space_miner "{{seed}}" "{{ticks}}" "{{runs_dir}}"
 
 # Generate a plain HTML debug map. Defaults to the latest runs/*.jsonl file.
 map path="" scenario="" out="":
