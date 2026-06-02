@@ -142,9 +142,110 @@ concept is real.
 
 ---
 
+## Validation experiments queued (pre-port)
+
+Before committing to a Rust/Tokio port — which would lock in whatever dynamics
+the prototype currently has — we want to pressure-test whether the *pattern*
+matches intent. Hand-picked single-seed narratives are misleading. Items below
+are ordered by expected information per hour of work.
+
+1. **Multi-seed sweep (50–100 seeds).** Aggregate divergence stats across many
+   seeds of the Frontier scenario: how often does the King's end-of-run belief
+   meaningfully diverge from truth? How often does forgery / skimming go
+   undetected? How often does an unlucky seed produce *no* interesting
+   institutional failure? Establishes whether the dramatic moments we've
+   been reading are typical or rare.
+2. **Wider topology (siblings).** Two governors under the King, or two
+   commanders under one governor. Right now divergence is a single thread;
+   with siblings the King can *compare* reports, which is where political
+   reasoning actually starts ("Aldric's numbers look different from
+   Brennar's"). Engine supports it; only the scenario needs widening.
+3. **Pull-based `INFO_REQUEST`.** Third `MessageKind` so superiors can spend
+   a courier to ask "what's actually going on?" rather than passively waiting
+   for ambient pushes. ~80 lines in Python; ~3× that in Rust. Only worth
+   doing if (1) and (2) suggest the King feels too passive.
+4. **Stress dial.** Crank misinformation / corruption / loss parameters to
+   extremes and watch whether the system degrades gracefully or collapses
+   into noise — and crank them to zero to confirm divergence vanishes. Tells
+   us whether the dynamics are tuned in a sensitive range.
+
+These run on the existing engine. None require structural changes before
+they can be answered.
+
+---
+
 ## Observations log
 
 Append-only. Add notes as the design evolves.
+
+### 2026-06-02 — Multi-seed sweep #1 (Claude Opus 4.7 via Claude Code)
+
+First aggregation across 100 seeds × 300 ticks of the Frontier scenario, via
+`tools/sweep.py`. Numbers are the King's end-of-run belief vs. truth, expressed
+as signed % error.
+
+| Subject                       |  mean | median |  p10 |  p90 |
+| ----------------------------- | ----: | -----: | ---: | ---: |
+| Capital.{food,garrison,unrest}|  ≈ 0  |   ≈ 0  |  −8  |  +8  |
+| Province.garrison_strength    |  +0.6 |  +0.3  |  −4  |  +5  |
+| Province.unrest               |  −0.7 |  −1.9  |  −7  |  +9  |
+| Frontier.garrison_strength    | **+69**| **+70**| **+57** | **+80** |
+| Frontier.food_stores          | +156  |  +122  |  −23 | +229 |
+| Frontier.unrest               |  −39  |  −41   |  −46 |  −34 |
+
+Event counts (per seed): forgery ≈ 96, skim ≈ 34, courier_lost ≈ 23,
+urgent_report ≈ 17, orders ≈ 15, actions ≈ 10. **100/100** seeds saw
+forgery; **69/100** saw a dismissal; **0/100** were narratively silent.
+
+What this tells us:
+
+- The "institutional rot" pattern is **structurally robust**, not lucky. Every
+  seed produces the politically-tinted divergence at the Frontier and almost
+  none at Province / Capital where reporters are honest. The honest-vs-
+  dishonest contrast is the central finding the design is meant to produce,
+  and it's there in 100% of runs.
+- However, divergence on `Frontier.garrison_strength` is **very tightly
+  banded** (p10 +57, p90 +80). That's a ~23-point spread on a ~70-point
+  mean — much narrower than I'd expect from a "noisy political system."
+  The forgery trigger is binary (`loyalty < 0.4`) with severity derived
+  deterministically from `(threshold − loyalty)`, and `forge_value` caps at
+  2.5× true belief. So the King's eventual error is almost a function of
+  `(Aldric's traits)`, not the seed. Stochastic inputs (observation noise,
+  jitter, loss) are dwarfed by this structural ceiling.
+- `Frontier.food_stores` is much wider (−23 to +229). That's the one
+  variable where skimming directly competes with `SEND_SUPPLIES` orders —
+  the timing race between drain and resupply gives randomness real leverage.
+  This is the "interesting" variable in the current scenario.
+- `Province.food_stores` has 63/100 seeds where Mira is dismissed and the
+  new appointee has no belief about the variable yet — that's why the mean
+  is dominated by a few outlier seeds (+514%). The honest replacement
+  hasn't had time to observe before t=300.
+
+Action items this surfaces:
+
+1. **Forgery is too on-rails.** It needs at least one of: trait-driven
+   per-report stochasticity ("does Aldric lie *this time*?"), a calibration
+   risk (lies get caught when reality and report diverge too much), or
+   superior counter-checks. Right now Aldric lies *every* time it's
+   politically convenient, identically across all seeds.
+2. **Skim rate is fixed at 60 food/cycle** (also noted in M3 obs). The
+   30–35 skim count per seed is basically "decide cycles fired" — no
+   variance at all. Tying skim magnitude to `ambition × (1 − loyalty)`
+   with a random component would give the food curve real seed-sensitivity.
+3. **Honest replacements need bootstrap belief.** When the King dismisses
+   Mira at t=200 and Iselle has no belief about anything at t=300, the
+   final snapshot reads as "no belief" rather than "honest fresh read."
+   A new appointee should observe their region immediately on appointment
+   (currently waits one `observe_every` cycle).
+4. The 100/100 "narratively interesting" hit rate is a positive sign, but
+   the metric is loose. A stricter sweep — "did the King act on a
+   demonstrably wrong belief in a way that visibly hurt true state?" —
+   would be more discriminating, and is the next iteration of this tool.
+
+Net read: the pattern *is* what the design promised; the **dynamics are
+under-randomized**. Before porting to Rust, the forgery and skim mechanics
+want a stochastic layer so seed-to-seed variance reflects genuine political
+uncertainty rather than just observation noise.
 
 ### 2026-05-26 — initial M1 build (Claude Opus 4.7 via Claude Code)
 
