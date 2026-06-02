@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import statistics
 from typing import TYPE_CHECKING
 
 from .actions import send_supplies, suppress_unrest, transfer_garrison
@@ -19,13 +20,15 @@ GOV_AUTONOMOUS_UNREST = 75.0     # governor acts alone above this
 CMD_LOW_FOOD = 500.0             # commander sends urgent food cry below this
 CMD_LOW_GARRISON = 600.0         # commander screams for reinforcement
 SUPPRESS_DURATION = 12
-SKIM_LOYALTY_THRESHOLD = 0.4
-SKIM_AMBITION_THRESHOLD = 0.5
+SKIM_LOYALTY_THRESHOLD = 0.85    # smooth gate — only deeply virtuous never skim
+SKIM_AMBITION_THRESHOLD = 0.3
 SKIM_FRAC_MIN = 0.02              # baseline 2% of current stores per attempt
 SKIM_FRAC_MAX = 0.06              # up to 6%, before disloyalty multiplier
 KING_STRIKES_TO_DISMISS = 3      # consecutive bad reviews before sacking
-KING_REVIEW_UNREST = 60.0        # believed unrest above this counts as a strike
-KING_REVIEW_GARRISON = 800.0     # believed garrison below this counts as a strike
+KING_REVIEW_UNREST = 60.0        # believed unrest above this counts as a strike (single-sub fallback)
+KING_REVIEW_GARRISON = 800.0     # believed garrison below this counts as a strike (single-sub fallback)
+PEER_DEV_LOW = 1.0               # health below peer median by this much -> underperformance strike
+PEER_DEV_HIGH = 0.8              # health above peer median by this much -> suspicion strike
 # -----------------------------------------------------------------------------
 
 
@@ -54,11 +57,15 @@ def _maybe_skim(sim: "Simulation", actor: "Actor") -> None:
     if available <= 0:
         return
 
-    p = actor.traits.ambition * (1.0 - actor.traits.loyalty)
+    # Smooth probability curve. (1 - loyalty)^2 means perfectly loyal -> 0,
+    # mildly loyal still very rare, deeply disloyal frequent. Hard gates at
+    # SKIM_LOYALTY_THRESHOLD and SKIM_AMBITION_THRESHOLD keep the very
+    # virtuous immune so unit tests stay deterministic.
+    disloyalty = 1.0 - actor.traits.loyalty
+    p = actor.traits.ambition * disloyalty * disloyalty
     if sim.rng.random() >= p:
         return
 
-    disloyalty = 1.0 - actor.traits.loyalty
     frac = sim.rng.uniform(SKIM_FRAC_MIN, SKIM_FRAC_MAX) * (1.0 + disloyalty)
     take = min(available, available * frac)
     if take <= 0:
@@ -178,25 +185,102 @@ def _maybe_send_supplies(sim: "Simulation", king: "Actor", routed_via: "Actor", 
                     magnitude=magnitude, priority=1)
 
 
-def _review_subordinate(sim: "Simulation", king: "Actor", sub: "Actor") -> None:
-    """Increment or clear a strike against this subordinate based on King's belief
-    of all regions in the sub's chain of command. After enough strikes, dismiss
-    and replace from the candidate pool.
+def _chain_regions(sim: "Simulation", sub: "Actor") -> list[str]:
+    return [sub.region] + [s.region for s in _subordinates(sim, sub)]
+
+
+def _chain_health(sim: "Simulation", king: "Actor", sub: "Actor") -> float | None:
+    """A scalar 'how healthy is this sub's span of command' from the King's
+    belief state. Higher = better. Returns None if the King has no relevant
+    beliefs yet.
+
+    Composition: normalised garrison + food, minus normalised unrest, summed
+    over the sub's region and any forward regions they oversee. Units are
+    arbitrary — what matters is consistent comparison across siblings.
     """
-    regions = [sub.region] + [s.region for s in _subordinates(sim, sub)]
-    bad_now = False
-    for r in regions:
-        unrest = king.known.get(sim.subject_for(r, "unrest"))
-        if unrest and unrest.value > KING_REVIEW_UNREST:
-            bad_now = True
-        garrison = king.known.get(sim.subject_for(r, "garrison_strength"))
-        if garrison and garrison.value < KING_REVIEW_GARRISON:
-            bad_now = True
+    score = 0.0
+    saw_any = False
+    for r in _chain_regions(sim, sub):
+        g = king.known.get(sim.subject_for(r, "garrison_strength"))
+        f = king.known.get(sim.subject_for(r, "food_stores"))
+        u = king.known.get(sim.subject_for(r, "unrest"))
+        if g is None and f is None and u is None:
+            continue
+        saw_any = True
+        if g is not None:
+            score += g.value / 1000.0
+        if f is not None:
+            score += f.value / 1000.0
+        if u is not None:
+            score -= u.value / 100.0
+    return score if saw_any else None
+
+
+def _review_subordinate(sim: "Simulation", king: "Actor", sub: "Actor") -> None:
+    """Award or clear a strike against this subordinate.
+
+    When the King has multiple direct subordinates, the review is
+    *comparative*: each sub's chain-health is compared against the median
+    across peers. Falling well below the median is an underperformance
+    strike; sitting well above it is a *suspicion* strike — "your region
+    is reporting prosperity while your peers under similar shocks are not."
+
+    With a single subordinate, fall back to absolute thresholds (the old
+    M3 behaviour). Without peers, there is nothing to compare against.
+
+    After KING_STRIKES_TO_DISMISS consecutive strikes -> dismiss and replace.
+    """
+    peers = _subordinates(sim, king)
+    reason: str | None = None
+
+    if len(peers) >= 2:
+        peer_scores: dict[str, float] = {}
+        for p in peers:
+            h = _chain_health(sim, king, p)
+            if h is not None:
+                peer_scores[p.id] = h
+        my_score = peer_scores.get(sub.id)
+        if my_score is None or len(peer_scores) < 2:
+            bad_now = False
+        else:
+            others = [v for k, v in peer_scores.items() if k != sub.id]
+            peer_median = statistics.median(others)
+            if my_score < peer_median - PEER_DEV_LOW:
+                bad_now = True
+                reason = f"underperforming peers ({my_score:.2f} vs {peer_median:.2f})"
+            elif my_score > peer_median + PEER_DEV_HIGH:
+                bad_now = True
+                reason = f"suspiciously rosy vs peers ({my_score:.2f} vs {peer_median:.2f})"
+            else:
+                bad_now = False
+    else:
+        # Single-sub fallback — absolute thresholds.
+        bad_now = False
+        for r in _chain_regions(sim, sub):
+            unrest = king.known.get(sim.subject_for(r, "unrest"))
+            if unrest and unrest.value > KING_REVIEW_UNREST:
+                bad_now = True
+                reason = f"high believed unrest in {r}"
+            garrison = king.known.get(sim.subject_for(r, "garrison_strength"))
+            if garrison and garrison.value < KING_REVIEW_GARRISON:
+                bad_now = True
+                reason = f"low believed garrison in {r}"
 
     prev = king.strikes.get(sub.id, 0)
     new = prev + 1 if bad_now else 0
     king.strikes[sub.id] = new
-    if new == 0 and prev > 0:
+    if bad_now:
+        sim.event_log.emit(
+            sim.now,
+            "review_strike",
+            f"[{king.region}] {king.title} marks {sub.title} {sub.display_name} "
+            f"({new}/{KING_STRIKES_TO_DISMISS}): {reason}",
+            actor=king.id,
+            subordinate=sub.id,
+            strike=new,
+            reason=reason,
+        )
+    elif prev > 0:
         sim.event_log.emit(
             sim.now,
             "review_cleared",
@@ -205,7 +289,7 @@ def _review_subordinate(sim: "Simulation", king: "Actor", sub: "Actor") -> None:
             actor=king.id,
             subordinate=sub.id,
         )
-    elif new >= KING_STRIKES_TO_DISMISS:
+    if new >= KING_STRIKES_TO_DISMISS:
         _dismiss_and_replace(sim, king, sub)
 
 

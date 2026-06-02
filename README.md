@@ -193,6 +193,96 @@ they can be answered.
 
 Append-only. Add notes as the design evolves.
 
+### 2026-06-02 — Smoothed gates + peer-comparison review (Claude Opus 4.7 via Claude Code)
+
+Acting on the two pre-port action items the stress dial surfaced:
+
+**(a) Smoothed forgery/skim gates.** Raised both hard gates from
+``loyalty < 0.4`` to ``loyalty < 0.85`` — so only effectively-saints
+are exempt — and squared the disloyalty term in the probability:
+``ambition * (1 - loyalty)^2``. Severity multiplier becomes
+``disloyalty * uniform(0.5, 1.5)`` clamped to [0,1]. Effect: mildly
+loyal actors lie occasionally rather than not at all; the dial no
+longer has a cliff at the boundary.
+
+**(b) Peer-comparison review.** When the King has ≥2 direct
+subordinates, ``_review_subordinate`` now compares each sub's
+chain-health (normalised garrison + food − unrest, summed over their
+span) against the median of peers. A score *below* the median by
+``PEER_DEV_LOW`` is an **underperformance strike**; a score *above* by
+``PEER_DEV_HIGH`` is a **suspicion strike** — "your region is
+reporting prosperity while peers under similar shocks are not." With
+only one subordinate, falls back to absolute thresholds.
+
+Stress dial re-run shows the cliff is gone:
+
+| profile  | report_forged | Frontier garrison err |
+| -------- | ------------: | --------------------: |
+| pristine |       7.8     |        +3.9           |
+| low      |      16.0     |        +6.3           |
+| default  |      44.6     |       +44.3           |
+| high     |      94.2     |      +111.8           |
+| broken   |     108.9     |      +131.2           |
+
+Pristine and low are now distinguishable (forgery 7.8 → 16). The curve
+is monotonic and smooth, not a step function. Pristine no longer
+produces zero forgeries — even very loyal actors occasionally shade
+the truth, which is realistic.
+
+100-seed sweep shows a much wider spread on Frontier divergence:
+``garrison_strength`` p10..p90 went from +3..+79 to **+3..+131**
+(seed-to-seed variance much richer). Median is now +13% rather than
++24% — half of seeds Aldric barely lies, half he gets away with
+egregious forgery. Different runs produce different institutional
+arcs, which is the dynamic uncertainty we wanted.
+
+**Dismissals dropped 3.5/seed → 1.1/seed.** The peer comparison is
+much more selective. Walking through seed=7's review events:
+
+```
+t= 40  strike  gov_mira:    suspiciously rosy vs peers (6.08 vs 5.11)
+t= 60  strike  gov_mira:    suspiciously rosy vs peers (6.02 vs 4.91)
+t= 60  strike  gov_cassia:  underperforming peers     (4.91 vs 6.02)
+t=100  strike  gov_mira:    underperforming peers     (4.00 vs 5.03)
+t=100  strike  gov_cassia:  suspiciously rosy vs peers (5.03 vs 4.00)
+t=140  strike  gov_mira:    underperforming peers     (2.67 vs 3.73)
+t=140  strike  gov_cassia:  suspiciously rosy vs peers (3.73 vs 2.67)
+```
+
+The King's verdict alternates: early on, Aldric's forgeries make
+Mira's chain look rosy → Cassia "underperforming." Then Frontier
+shocks finally percolate through belief; the picture flips and Cassia
+looks suspiciously rosy while Mira "underperforms." The *honest*
+governor (Cassia) is being punished for being too good; the *honest
+middle manager* (Mira) is being punished for honestly reporting the
+rot below her. The corrupt commander (Aldric) catches no strikes at
+all — the review only sees direct subordinates, and his governor
+takes every blow for him.
+
+This is the **exact institutional pathology** the design was meant to
+produce: a sovereign with all the data, two honest officials, one
+liar — and the liar is the only person never punished. The honest
+people punish each other.
+
+A consequence to think about: dismissals drop because strikes don't
+accumulate three consecutive — they alternate strike-type between
+"rosy" and "underperforming" cycles. A real bureaucracy would track
+different complaints separately, not reset them. A future
+``strikes_by_kind`` dict on the actor would preserve memory across
+complaint types. Not blocking; logged in obs.
+
+Updated obs queue (pre-port action items from earlier sweeps):
+
+- ~~Stochastic forgery + skim~~ — done.
+- ~~Sibling topology~~ — done.
+- ~~Stress dial~~ — done; no cliff edge.
+- ~~Smooth forgery/skim gates~~ — done in this commit.
+- ~~Compare-against-peer review~~ — done in this commit.
+- **Open:** strike-by-kind memory (so complaints don't reset across types).
+- **Open:** reputation/trust per actor in the King's mind (separate from traits).
+- **Open:** comparison-suspicion at the commander level too, not just governor.
+- **Open:** pull-based INFO_REQUEST (King spends a courier to verify).
+
 ### 2026-06-02 — Stress dial (Claude Opus 4.7 via Claude Code)
 
 Built `tools/stress.py` — runs the scenario under five preset profiles

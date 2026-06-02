@@ -15,7 +15,8 @@ from .scheduler import Event, EventKind, Scheduler
 from .world import VARIABLES, World
 
 
-FORGERY_THRESHOLD = 0.4  # loyalty below this triggers possible forgery
+FORGERY_THRESHOLD = 0.85  # loyalty above this -> no forgery (only saints are exempt).
+                          # Below it, probability scales smoothly with (1-loyalty)^2.
 
 ScriptedFn = Callable[["Simulation"], None]
 
@@ -213,16 +214,16 @@ class Simulation:
                     (polarity == +1 and belief.value < 1000.0) or
                     (polarity == -1 and belief.value > 20.0)
                 )
-                # Probability of actually forging this particular report.
-                # Disloyal + ambitious actors lie more often; less so otherwise.
-                forge_prob = actor.traits.ambition * (1.0 - actor.traits.loyalty)
+                # Smooth probability — (1 - loyalty)^2 means mildly disloyal
+                # actors lie occasionally rather than never; deeply disloyal
+                # ones lie almost always. Ambition modulates appetite for
+                # career-protective lies.
+                disloyalty = 1.0 - actor.traits.loyalty
+                forge_prob = actor.traits.ambition * disloyalty * disloyalty
                 if is_bad_news and self.rng.random() < forge_prob:
-                    severity_base = (
-                        max(0.0, FORGERY_THRESHOLD - actor.traits.loyalty) / FORGERY_THRESHOLD
-                    )
                     severity = max(
                         0.0,
-                        min(1.0, severity_base * self.rng.uniform(0.5, 1.5)),
+                        min(1.0, disloyalty * self.rng.uniform(0.5, 1.5)),
                     )
                     outgoing_value = forge_value(belief.value, variable, severity)
                     forged = True
