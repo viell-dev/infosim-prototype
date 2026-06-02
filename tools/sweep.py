@@ -70,9 +70,9 @@ def run_one(seed: int, ticks: int) -> dict:
 
     king = actors["king"]
     truth_vs_belief: dict[str, dict[str, float | None]] = {}
-    for region in world.regions.values():
-        for var, true_value in region.state.items():
-            subj = Simulation.subject_for(region.name, var)
+    for a in actors.values():
+        for stat, true_value in a.stats.items():
+            subj = Simulation.subject_for(a.id, stat)
             belief = king.known.get(subj)
             truth_vs_belief[subj] = {
                 "truth": float(true_value),
@@ -128,8 +128,13 @@ def main() -> None:
 
     runs = [run_one(args.seed_start + i, args.ticks) for i in range(args.seeds)]
 
-    # --- Divergence per (region, variable) -------------------------------
-    subjects = sorted(runs[0]["truth_vs_belief"].keys())
+    # --- Divergence per (actor, stat) ------------------------------------
+    # Union of subjects across all runs — replacements introduce new actor
+    # ids in some seeds. Missing rows are silently skipped per seed.
+    all_subjects: set[str] = set()
+    for r in runs:
+        all_subjects.update(r["truth_vs_belief"].keys())
+    subjects = sorted(all_subjects)
     print(f"\n=== Frontier sweep: {args.seeds} seeds × {args.ticks} ticks ===\n")
     print("King's belief vs truth (signed % error, end-of-run):")
     print(f"{'subject':38s}  {'mean':>7}  {'med':>7}  {'p10':>7}  {'p90':>7}  "
@@ -139,7 +144,10 @@ def main() -> None:
         zero_truths = 0
         no_belief = 0
         for r in runs:
-            row = r["truth_vs_belief"][subj]
+            row = r["truth_vs_belief"].get(subj)
+            if row is None:
+                # actor wasn't present at end of this seed (never appointed, or already dismissed)
+                continue
             if row["belief"] is None:
                 no_belief += 1
                 continue

@@ -13,7 +13,7 @@ def _stub_order() -> Order:
         issuer="king",
         recipient="gov",
         kind=OrderKind.REINFORCE,
-        target_region="Frontier",
+        target_actor="cmd_aldric",
         magnitude=300.0,
         issued_time=10.0,
         deadline_time=80.0,

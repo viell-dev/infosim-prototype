@@ -34,44 +34,58 @@ def _schedule(sim: "Simulation", action: ActionInFlight) -> None:
 def transfer_garrison(
     sim: "Simulation",
     actor_id: str,
-    src_region: str,
-    dst_region: str,
+    src_actor_id: str,
+    dst_actor_id: str,
     magnitude: float,
 ) -> ActionInFlight | None:
-    """Subtract magnitude from src immediately, add to dst after travel time."""
-    if src_region == dst_region or magnitude <= 0:
+    """Subtract magnitude from src actor's garrison, add to dst actor's after travel."""
+    if src_actor_id == dst_actor_id or magnitude <= 0:
         return None
-    src = sim.world.regions[src_region]
-    available = src.state.get("garrison_strength", 0.0)
+    src = sim.actors.get(src_actor_id)
+    dst = sim.actors.get(dst_actor_id)
+    if src is None or dst is None:
+        return None
+    available = src.stats.get("garrison_strength", 0.0)
     moved = min(available, magnitude)
     if moved <= 0:
         return None
-    src.state["garrison_strength"] = available - moved
-    travel = sim.world.travel_ticks(src_region, dst_region)
+    src.stats["garrison_strength"] = available - moved
+    travel = sim.world.travel_ticks(src.location, dst.location)
     sim.event_log.emit(
         sim.now,
         "action_started",
-        f"[{src_region}] {moved:.0f} troops depart for {dst_region} "
+        f"[{src.location}] {moved:.0f} troops depart for {dst.location} "
         f"(eta t={sim.now + travel:.0f})",
         actor=actor_id,
         kind_detail="transfer_garrison",
-        src_region=src_region,
-        dst_region=dst_region,
+        src_actor=src_actor_id,
+        dst_actor=dst_actor_id,
         magnitude=moved,
     )
 
     def arrive(s: "Simulation") -> None:
-        dst = s.world.regions[dst_region]
-        before = dst.state.get("garrison_strength", 0.0)
-        dst.state["garrison_strength"] = before + moved
+        dst_now = s.actors.get(dst_actor_id)
+        if dst_now is None:
+            s.event_log.emit(
+                s.now,
+                "action_completed",
+                f"{moved:.0f} reinforcements vanish — recipient {dst_actor_id} no longer in office",
+                actor=actor_id,
+                kind_detail="transfer_garrison_arrive",
+                dst_actor=dst_actor_id,
+                magnitude=moved,
+            )
+            return
+        before = dst_now.stats.get("garrison_strength", 0.0)
+        dst_now.stats["garrison_strength"] = before + moved
         s.event_log.emit(
             s.now,
             "action_completed",
-            f"[{dst_region}] {moved:.0f} reinforcements arrive "
-            f"(garrison {before:.0f} → {dst.state['garrison_strength']:.0f})",
+            f"[{dst_now.location}] {moved:.0f} reinforcements arrive "
+            f"(garrison {before:.0f} → {dst_now.stats['garrison_strength']:.0f})",
             actor=actor_id,
             kind_detail="transfer_garrison_arrive",
-            region=dst_region,
+            dst_actor=dst_actor_id,
             magnitude=moved,
         )
 
@@ -79,7 +93,7 @@ def transfer_garrison(
         start_time=sim.now,
         complete_time=sim.now + travel,
         actor_id=actor_id,
-        description=f"transfer {moved:.0f} garrison {src_region}→{dst_region}",
+        description=f"transfer {moved:.0f} garrison {src_actor_id}→{dst_actor_id}",
         effect_fn=arrive,
     )
     _schedule(sim, action)
@@ -89,30 +103,34 @@ def transfer_garrison(
 def suppress_unrest(
     sim: "Simulation",
     actor_id: str,
-    region: str,
+    target_actor_id: str,
     duration: float,
     competence: float,
     rng: random.Random,
 ) -> ActionInFlight:
-    """Run a suppression campaign for `duration` time; outcome modulated by competence."""
+    """Suppression campaign that modifies target actor's unrest stat after `duration`."""
     backlash_chance = max(0.0, 0.3 - 0.3 * competence)
     roll = rng.random()
     backfires = roll < backlash_chance
 
+    target = sim.actors.get(target_actor_id)
+    loc = target.location if target else "(absent)"
     sim.event_log.emit(
         sim.now,
         "action_started",
-        f"[{region}] suppression campaign begins (duration {duration:.0f}t, "
+        f"[{loc}] suppression campaign begins (duration {duration:.0f}t, "
         f"backlash risk {backlash_chance:.2f})",
         actor=actor_id,
         kind_detail="suppress_unrest",
-        region=region,
+        target_actor=target_actor_id,
         duration=duration,
     )
 
     def resolve(s: "Simulation") -> None:
-        r = s.world.regions[region]
-        before = r.state.get("unrest", 0.0)
+        target_now = s.actors.get(target_actor_id)
+        if target_now is None:
+            return
+        before = target_now.stats.get("unrest", 0.0)
         if backfires:
             delta = +15.0
             outcome = "backfired"
@@ -120,14 +138,15 @@ def suppress_unrest(
             delta = -25.0 * (0.5 + competence)
             outcome = "succeeded"
         after = max(0.0, before + delta)
-        r.state["unrest"] = after
+        target_now.stats["unrest"] = after
         s.event_log.emit(
             s.now,
             "action_completed",
-            f"[{region}] suppression {outcome}: unrest {before:.0f} → {after:.0f}",
+            f"[{target_now.location}] suppression {outcome}: unrest "
+            f"{before:.0f} → {after:.0f}",
             actor=actor_id,
             kind_detail="suppress_unrest_resolve",
-            region=region,
+            target_actor=target_actor_id,
             outcome=outcome,
             before=before,
             after=after,
@@ -137,7 +156,7 @@ def suppress_unrest(
         start_time=sim.now,
         complete_time=sim.now + duration,
         actor_id=actor_id,
-        description=f"suppress unrest in {region}",
+        description=f"suppress unrest at {target_actor_id}",
         effect_fn=resolve,
     )
     _schedule(sim, action)
@@ -147,43 +166,48 @@ def suppress_unrest(
 def send_supplies(
     sim: "Simulation",
     actor_id: str,
-    src_region: str,
-    dst_region: str,
+    src_actor_id: str,
+    dst_actor_id: str,
     magnitude: float,
 ) -> ActionInFlight | None:
-    if src_region == dst_region or magnitude <= 0:
+    if src_actor_id == dst_actor_id or magnitude <= 0:
         return None
-    src = sim.world.regions[src_region]
-    available = src.state.get("food_stores", 0.0)
+    src = sim.actors.get(src_actor_id)
+    dst = sim.actors.get(dst_actor_id)
+    if src is None or dst is None:
+        return None
+    available = src.stats.get("food_stores", 0.0)
     moved = min(available, magnitude)
     if moved <= 0:
         return None
-    src.state["food_stores"] = available - moved
-    travel = sim.world.travel_ticks(src_region, dst_region)
+    src.stats["food_stores"] = available - moved
+    travel = sim.world.travel_ticks(src.location, dst.location)
     sim.event_log.emit(
         sim.now,
         "action_started",
-        f"[{src_region}] {moved:.0f} food shipped to {dst_region} "
+        f"[{src.location}] {moved:.0f} food shipped to {dst.location} "
         f"(eta t={sim.now + travel:.0f})",
         actor=actor_id,
         kind_detail="send_supplies",
-        src_region=src_region,
-        dst_region=dst_region,
+        src_actor=src_actor_id,
+        dst_actor=dst_actor_id,
         magnitude=moved,
     )
 
     def arrive(s: "Simulation") -> None:
-        dst = s.world.regions[dst_region]
-        before = dst.state.get("food_stores", 0.0)
-        dst.state["food_stores"] = before + moved
+        dst_now = s.actors.get(dst_actor_id)
+        if dst_now is None:
+            return
+        before = dst_now.stats.get("food_stores", 0.0)
+        dst_now.stats["food_stores"] = before + moved
         s.event_log.emit(
             s.now,
             "action_completed",
-            f"[{dst_region}] {moved:.0f} food arrives "
-            f"(stores {before:.0f} → {dst.state['food_stores']:.0f})",
+            f"[{dst_now.location}] {moved:.0f} food arrives "
+            f"(stores {before:.0f} → {dst_now.stats['food_stores']:.0f})",
             actor=actor_id,
             kind_detail="send_supplies_arrive",
-            region=dst_region,
+            dst_actor=dst_actor_id,
             magnitude=moved,
         )
 
@@ -191,7 +215,7 @@ def send_supplies(
         start_time=sim.now,
         complete_time=sim.now + travel,
         actor_id=actor_id,
-        description=f"send {moved:.0f} food {src_region}→{dst_region}",
+        description=f"send {moved:.0f} food {src_actor_id}→{dst_actor_id}",
         effect_fn=arrive,
     )
     _schedule(sim, action)

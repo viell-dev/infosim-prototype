@@ -62,8 +62,13 @@ class Simulation:
         return self.scheduler.now
 
     @staticmethod
-    def subject_for(region: str, var: str) -> str:
-        return f"{region}.{var}"
+    def subject_for(actor_id: str, stat: str) -> str:
+        """Belief subject key. ``"cmd_aldric.garrison_strength"`` means
+        "estimate of cmd_aldric's garrison_strength stat." The dot-separator
+        keeps the flat-dict scheme from M1 but reinterprets the LHS as an
+        actor id rather than a region name.
+        """
+        return f"{actor_id}.{stat}"
 
     # ---- public scheduling -----------------------------------------------
 
@@ -168,9 +173,15 @@ class Simulation:
     # ---- handlers --------------------------------------------------------
 
     def _handle_observe(self, actor: Actor) -> None:
-        region = self.world.regions[actor.region]
-        for var, true_value in sorted(region.state.items()):
-            subject = self.subject_for(region.name, var)
+        """Observe own stats with competence noise -> own belief.
+
+        The actor's authoritative numbers (``actor.stats``) get filtered
+        through their perception. Even an actor with perfect knowledge of
+        their own resources may not perfectly perceive them — a
+        low-competence commander undercounts garrison.
+        """
+        for stat, true_value in sorted(actor.stats.items()):
+            subject = self.subject_for(actor.id, stat)
             report = observe(actor, subject, float(true_value), self.rng)
             report.origin_time = self.now
             actor.update_belief(
@@ -183,11 +194,11 @@ class Simulation:
             self.event_log.emit(
                 self.now,
                 "observation",
-                f"[{region.name}] {actor.title} {actor.display_name} observes "
-                f"{var} ≈ {report.estimated_value:.0f} (true {true_value:.0f}, "
+                f"[{actor.location}] {actor.title} {actor.display_name} observes "
+                f"own {stat} ≈ {report.estimated_value:.0f} (true {true_value:.0f}, "
                 f"conf {report.confidence:.2f})",
                 actor=actor.id,
-                region=region.name,
+                location=actor.location,
                 subject=subject,
                 estimated_value=report.estimated_value,
                 true_value=true_value,
@@ -195,21 +206,21 @@ class Simulation:
             )
 
     def _handle_report(self, actor: Actor) -> None:
-        if actor.reports_to is None:
+        if actor.commander is None:
             return
         if not actor.known:
             return
-        recipient = self.actors.get(actor.reports_to)
+        recipient = self.actors.get(actor.commander)
         if recipient is None:
             return
-        travel = self.world.travel_ticks(actor.region, recipient.region)
+        travel = self.world.travel_ticks(actor.location, recipient.location)
         for subject in sorted(actor.known.keys()):
             belief = actor.known[subject]
             outgoing_value = belief.value
             forged = False
             if actor.traits.loyalty < FORGERY_THRESHOLD:
-                variable = subject.split(".", 1)[1]
-                polarity = VARIABLES[variable].polarity
+                stat = subject.split(".", 1)[1]
+                polarity = VARIABLES[stat].polarity
                 is_bad_news = (
                     (polarity == +1 and belief.value < 1000.0) or
                     (polarity == -1 and belief.value > 20.0)
@@ -225,7 +236,7 @@ class Simulation:
                         0.0,
                         min(1.0, disloyalty * self.rng.uniform(0.5, 1.5)),
                     )
-                    outgoing_value = forge_value(belief.value, variable, severity)
+                    outgoing_value = forge_value(belief.value, stat, severity)
                     forged = True
                     self.event_log.emit(
                         self.now,

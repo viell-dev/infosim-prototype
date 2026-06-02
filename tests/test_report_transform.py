@@ -11,8 +11,8 @@ def _actor(**traits: float) -> Actor:
         id="a",
         display_name="A",
         title="T",
-        region="R",
-        reports_to=None,
+        location="R",
+        commander=None,
         traits=Traits(**traits),
     )
 

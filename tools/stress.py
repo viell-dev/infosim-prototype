@@ -103,9 +103,9 @@ def run_one(seed: int, ticks: int, profile: Profile) -> dict:
             out["counts"][ev["kind"]] += 1
 
     out["beliefs"] = {}
-    for region in world.regions.values():
-        for var, truth in region.state.items():
-            subj = Simulation.subject_for(region.name, var)
+    for a in actors.values():
+        for stat, truth in a.stats.items():
+            subj = Simulation.subject_for(a.id, stat)
             belief = king.known.get(subj)
             out["beliefs"][subj] = {
                 "truth": float(truth),
@@ -135,12 +135,12 @@ def main() -> None:
 
     # Two parallel subjects to highlight the comparison.
     compare_subjects = (
-        "Frontier.garrison_strength",
-        "Borderlands.garrison_strength",
-        "Frontier.food_stores",
-        "Borderlands.food_stores",
-        "Frontier.unrest",
-        "Borderlands.unrest",
+        "cmd_aldric.garrison_strength",
+        "cmd_talen.garrison_strength",
+        "cmd_aldric.food_stores",
+        "cmd_talen.food_stores",
+        "cmd_aldric.unrest",
+        "cmd_talen.unrest",
     )
 
     print(f"\n=== Stress dial: {len(PROFILES)} profiles × "

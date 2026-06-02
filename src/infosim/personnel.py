@@ -22,21 +22,28 @@ def appoint(
     new_id: str,
     display_name: str,
     title: str,
-    region: str,
-    reports_to: str | None,
+    location: str,
+    commander: str | None,
     traits: Traits,
     report_every: float,
     observe_every: float,
     decide_every: float,
+    stats: dict[str, float] | None = None,
 ) -> Actor:
-    """Create a new actor, wire them into the hierarchy, and put them on the schedule."""
+    """Create a new actor, wire them into the hierarchy, and put them on the schedule.
+
+    ``stats`` defaults to inheriting the dismissed actor's stockpile — the
+    physical resources don't disappear with the office holder. Pass an
+    explicit dict to override.
+    """
     actor = Actor(
         id=new_id,
         display_name=display_name,
         title=title,
-        region=region,
-        reports_to=reports_to,
+        location=location,
+        commander=commander,
         traits=traits,
+        stats=dict(stats) if stats else {},
         report_every=report_every,
         observe_every=observe_every,
         decide_every=decide_every,
@@ -47,11 +54,11 @@ def appoint(
     sim.event_log.emit(
         sim.now,
         "appointed",
-        f"[{region}] {title} {display_name} takes office "
+        f"[{location}] {title} {display_name} takes office "
         f"(competence {traits.competence:.2f}, honesty {traits.honesty:.2f}, "
         f"loyalty {traits.loyalty:.2f})",
         actor=new_id,
-        region=region,
+        location=location,
         title=title,
         competence=traits.competence,
         honesty=traits.honesty,
@@ -72,9 +79,9 @@ def dismiss(sim: "Simulation", actor_id: str, reason: str) -> Actor | None:
     sim.event_log.emit(
         sim.now,
         "dismissed",
-        f"[{actor.region}] {actor.title} {actor.display_name} dismissed: {reason}",
+        f"[{actor.location}] {actor.title} {actor.display_name} dismissed: {reason}",
         actor=actor_id,
-        region=actor.region,
+        location=actor.location,
         reason=reason,
         tenure_time=sim.now - actor.tenure_start_time,
     )
