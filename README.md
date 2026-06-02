@@ -59,15 +59,25 @@ Outputs land in `runs/frontier-seed<N>-<timestamp>.{jsonl,log}`.
 
 ---
 
-## What the scenario does (M1 + M2)
+## What the scenario does (M1 + M2 + M3)
 
-`scenarios/frontier.py` wires a three-region line: **Capital → Province → Frontier**.
+`scenarios/frontier.py` wires **two parallel chains** under the same King:
 
-Three named actors form a hierarchy:
+```
+Capital  ──→ Province (Mira)   ──→ Frontier    (Aldric)   corrupt chain
+         └→ Marches  (Cassia)  ──→ Borderlands (Talen)    honest chain
+```
+
+Five named actors form the hierarchy:
 
 - **King Halric III** (Capital): high education, honest, low fear. Reports to no one.
 - **Governor Mira of Halen** (Province): moderate competence, somewhat dishonest, fearful, ambitious.
-- **Commander Aldric Vale** (Frontier): competent observer, but fearful of looking weak.
+- **Commander Aldric Vale** (Frontier): competent observer, but fearful of looking weak, *disloyal and ambitious* — the corruption engine.
+- **Governor Cassia of Reach** (Marches): loyal, honest, modest ambition — the foil to Mira.
+- **Commander Talen Voss** (Borderlands): loyal, honest, moderately competent — the foil to Aldric.
+
+The two chains face comparable raid/unrest/supply shocks at staggered times so the King's
+final belief about Frontier vs. Borderlands is a direct comparison of *reporter integrity*.
 
 Each region tracks three true variables: `garrison_strength`, `food_stores`, and `unrest`. Each
 variable carries a **polarity** — for garrison and food, low values are bad news; for unrest,
@@ -177,6 +187,74 @@ they can be answered.
 ## Observations log
 
 Append-only. Add notes as the design evolves.
+
+### 2026-06-02 — Sibling topology, two parallel chains (Claude Opus 4.7 via Claude Code)
+
+Doubled the scenario into two structurally similar chains under the same
+King:
+
+```
+Capital  ──→ Province (Mira)   ──→ Frontier    (Aldric)   corrupt chain
+         └→ Marches  (Cassia)  ──→ Borderlands (Talen)    honest chain
+```
+
+Cassia and Talen are deliberate foils — high loyalty, high honesty,
+moderate competence. Borderlands and Frontier get comparable
+(staggered) raid / unrest / supply shocks so their *true* states are
+roughly similar. Any divergence in the King's belief between them is
+then almost entirely the integrity of the commander.
+
+Candidate pool widened from 3 → 5 (Orla of Stenmark, Vanek the Younger)
+because two-chain dismissals cycle through faster.
+
+Sweep over 100 seeds × 300 ticks — King's end-of-run belief vs. truth,
+parallel regions side by side:
+
+| variable             |  Frontier  | Borderlands | ratio   |
+| -------------------- | ---------: | ----------: | ------: |
+| garrison_strength    |    +34.8%  |       +4.0% |    8.7× |
+| food_stores          |    +48.8%  |       +4.5% |   10.8× |
+| unrest               |    −22.2%  |       +2.2% |   ~10×  |
+
+The intermediate rungs reflect their governors. Province (Mira: somewhat
+dishonest, moderately corrupt) shows +2–7% errors. Marches (Cassia:
+honest, loyal) shows ±2%. The reporter's integrity is now legible in
+the data at every level.
+
+**Why this matters:** until now, divergence was a single signal — the
+King saw inflated Frontier numbers but had nothing to compare them
+against. With siblings, the King now sits on a *comparison artifact*.
+Two frontier regions face comparable shocks; one reports calmly, the
+other reports prosperity. A future "compare siblings" layer in the
+King's policy has something concrete to act on. (Not added in this
+commit — the point first was to surface the data, not to consume it.)
+
+Other knock-on effects:
+
+- Courier traffic ~doubled (lost 23 → 43, orders 15 → 33, actions
+  10 → 20). Engine handles it without breaking a sweat — the
+  discrete-event scheduler scales by *events*, not by actors.
+- Dismissals went 3.1 → 3.5 per seed despite the wider pool, because
+  there are now two governors that can fail their performance reviews.
+  Cassia's chain stays mostly intact; Mira's still cycles regularly.
+- 100/100 seeds remain narratively interesting; 0/100 silent.
+
+Things this enables but doesn't implement:
+
+1. **Comparison-based suspicion.** King notices that Aldric's region
+   reports a 1500-garrison raid as 1450; Talen reports an 800-garrison
+   raid as 850. A skill-check on the King (education? honesty?) against
+   the reporting commander (loyalty? competence?) could trigger an
+   investigation event.
+2. **Collusion / conflict between siblings.** Cassia could
+   *cross-corroborate* Aldric's report ("the King asked me — yes,
+   Frontier looks fine") or *undermine* it ("I hear different from
+   travellers"). Requires either a peer-message channel or routing via
+   the King.
+3. **Reputation gradient.** Each actor accumulates a perceived
+   trustworthiness in the King's mind, separate from their actual
+   traits. Belief weighting at relay/observation time would then drift
+   with reputation, not just with hop count.
 
 ### 2026-06-02 — Stochastic forgery + skim (Claude Opus 4.7 via Claude Code)
 

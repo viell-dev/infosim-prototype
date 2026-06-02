@@ -13,11 +13,23 @@ from ..world import Region, World
 
 
 def build() -> tuple[World, dict[str, Actor]]:
+    """Two-chain topology so the King has siblings to compare.
+
+        Capital  ──→ Province (Mira)   ──→ Frontier    (Aldric)   corrupt chain
+                 └→ Marches  (Cassia)  ──→ Borderlands (Talen)    honest chain
+
+    The two chains face similar (but not identical) shocks. Reports diverge
+    not only because of distance and bias but because the *people* differ —
+    one chain has a disloyal commander forging numbers and skimming food,
+    the other has a loyal commander reporting honestly. The King's belief
+    snapshot at end-of-run is the comparison artifact.
+    """
     world = World()
     world.add_region(Region(
         name="Capital",
         state={"garrison_strength": 1200, "food_stores": 3000, "unrest": 10},
     ))
+    # --- corrupt chain ---------------------------------------------------
     world.add_region(Region(
         name="Province",
         state={"garrison_strength": 800, "food_stores": 1800, "unrest": 25},
@@ -28,6 +40,17 @@ def build() -> tuple[World, dict[str, Actor]]:
     ))
     world.connect("Capital", "Province", travel_ticks=4)
     world.connect("Province", "Frontier", travel_ticks=6)
+    # --- honest chain ----------------------------------------------------
+    world.add_region(Region(
+        name="Marches",
+        state={"garrison_strength": 1000, "food_stores": 1800, "unrest": 20},
+    ))
+    world.add_region(Region(
+        name="Borderlands",
+        state={"garrison_strength": 1500, "food_stores": 900, "unrest": 30},
+    ))
+    world.connect("Capital", "Marches", travel_ticks=5)
+    world.connect("Marches", "Borderlands", travel_ticks=5)
 
     actors: dict[str, Actor] = {}
 
@@ -47,7 +70,8 @@ def build() -> tuple[World, dict[str, Actor]]:
         decide_every=20,
     ))
 
-    # Governor: politically cautious, moderately corrupt.
+    # --- corrupt chain ---------------------------------------------------
+    # Governor Mira: politically cautious, moderately corrupt.
     add(Actor(
         id="gov_mira",
         display_name="Mira of Halen",
@@ -59,10 +83,8 @@ def build() -> tuple[World, dict[str, Actor]]:
         observe_every=6,
         decide_every=10,
     ))
-
-    # Frontier commander: competent observer but with loyalty issues and
-    # serious ambition — the disloyalty engine of this scenario. Below the
-    # forgery and skim thresholds.
+    # Frontier commander Aldric: competent observer but with loyalty issues
+    # and serious ambition — the disloyalty engine of this scenario.
     add(Actor(
         id="cmd_aldric",
         display_name="Aldric Vale",
@@ -78,11 +100,44 @@ def build() -> tuple[World, dict[str, Actor]]:
         decide_every=8,
     ))
 
+    # --- honest chain ----------------------------------------------------
+    # Governor Cassia: loyal, honest, modest ambition. The foil to Mira.
+    add(Actor(
+        id="gov_cassia",
+        display_name="Cassia of Reach",
+        title="Governor",
+        region="Marches",
+        reports_to="king",
+        traits=Traits(competence=0.65, honesty=0.85, loyalty=0.8,
+                      fear=0.2, education=0.75, ambition=0.4),
+        report_every=12,
+        observe_every=6,
+        decide_every=10,
+    ))
+    # Commander Talen: loyal, honest, moderately competent. Foil to Aldric.
+    add(Actor(
+        id="cmd_talen",
+        display_name="Talen Voss",
+        title="Commander",
+        region="Borderlands",
+        reports_to="gov_cassia",
+        traits=Traits(competence=0.7, honesty=0.8, loyalty=0.85,
+                      fear=0.3, education=0.6, ambition=0.3),
+        report_every=8,
+        observe_every=4,
+        decide_every=8,
+    ))
+
     return world, actors
 
 
 def candidate_pool() -> list[Candidate]:
-    """Three reserve appointees with deliberately divergent profiles."""
+    """Five reserve appointees with deliberately divergent profiles.
+
+    Two-chain topology means dismissals can run through the pool faster, so
+    the bench is wider. Each profile is intentionally lopsided on one or
+    two axes so the King's pick reveals his own bias.
+    """
     return [
         Candidate(
             id="cand_brennar",
@@ -101,6 +156,18 @@ def candidate_pool() -> list[Candidate]:
             display_name="Terrick of Wynn",
             traits=Traits(competence=0.7, honesty=0.75, loyalty=0.7,
                           ambition=0.4, fear=0.3, education=0.8),
+        ),
+        Candidate(
+            id="cand_orla",
+            display_name="Orla of Stenmark",
+            traits=Traits(competence=0.8, honesty=0.6, loyalty=0.4,
+                          ambition=0.7, fear=0.25, education=0.7),
+        ),
+        Candidate(
+            id="cand_vanek",
+            display_name="Vanek the Younger",
+            traits=Traits(competence=0.5, honesty=0.9, loyalty=0.95,
+                          ambition=0.2, fear=0.45, education=0.5),
         ),
     ]
 
@@ -123,12 +190,26 @@ def _bump(sim: Simulation, region: str, var: str, delta: float, cause: str) -> N
 
 
 def scripted_events(sim: Simulation) -> None:
-    """Wire scripted true-state shocks."""
+    """Wire scripted true-state shocks across both chains.
+
+    Frontier and Borderlands face comparable raids/unrest/supply shocks at
+    staggered times. The two regions therefore reach roughly similar *true*
+    states — the divergence in the King's belief between the two is then
+    almost entirely the difference between Aldric (forging) and Talen
+    (honest).
+    """
+    # corrupt chain (Frontier)
     sim.schedule_scripted(40.0,  lambda s: _bump(s, "Frontier", "garrison_strength", -700, "raid"))
     sim.schedule_scripted(40.0,  lambda s: _bump(s, "Frontier", "unrest", +30, "raid_aftermath"))
     sim.schedule_scripted(60.0,  lambda s: _bump(s, "Frontier", "unrest", +25, "unrest_spike"))
     sim.schedule_scripted(80.0,  lambda s: _bump(s, "Frontier", "food_stores", -400, "supply_loss"))
     sim.schedule_scripted(140.0, lambda s: _bump(s, "Province", "unrest", +30, "tax_riot"))
+    # honest chain (Borderlands) — staggered so the log stays legible
+    sim.schedule_scripted(70.0,  lambda s: _bump(s, "Borderlands", "garrison_strength", -600, "raid"))
+    sim.schedule_scripted(70.0,  lambda s: _bump(s, "Borderlands", "unrest", +25, "raid_aftermath"))
+    sim.schedule_scripted(120.0, lambda s: _bump(s, "Borderlands", "food_stores", -350, "supply_loss"))
+    sim.schedule_scripted(180.0, lambda s: _bump(s, "Borderlands", "unrest", +20, "unrest_spike"))
+    sim.schedule_scripted(220.0, lambda s: _bump(s, "Marches", "unrest", +20, "tax_riot"))
 
 
 def run(seed: int, ticks: int, runs_dir: Path) -> Path:
