@@ -213,9 +213,16 @@ class Simulation:
                     (polarity == +1 and belief.value < 1000.0) or
                     (polarity == -1 and belief.value > 20.0)
                 )
-                if is_bad_news:
-                    severity = (
+                # Probability of actually forging this particular report.
+                # Disloyal + ambitious actors lie more often; less so otherwise.
+                forge_prob = actor.traits.ambition * (1.0 - actor.traits.loyalty)
+                if is_bad_news and self.rng.random() < forge_prob:
+                    severity_base = (
                         max(0.0, FORGERY_THRESHOLD - actor.traits.loyalty) / FORGERY_THRESHOLD
+                    )
+                    severity = max(
+                        0.0,
+                        min(1.0, severity_base * self.rng.uniform(0.5, 1.5)),
                     )
                     outgoing_value = forge_value(belief.value, variable, severity)
                     forged = True

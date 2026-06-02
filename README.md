@@ -178,6 +178,58 @@ they can be answered.
 
 Append-only. Add notes as the design evolves.
 
+### 2026-06-02 — Stochastic forgery + skim (Claude Opus 4.7 via Claude Code)
+
+Acting on the previous sweep's "dynamics are under-randomized" finding.
+Both forgery and skimming gained a probability gate plus magnitude noise,
+all derived from existing traits — no new actor fields, no new tunables
+beyond two skim fraction bounds.
+
+- **Forgery probability** per outgoing bad-news report:
+  ``ambition * (1 - loyalty)`` (Aldric: 0.8 × 0.75 = 0.6).
+  Severity multiplier ``uniform(0.5, 1.5)`` clamped to [0,1], so even when
+  he does lie, the magnitude varies.
+- **Skim probability** per decide cycle: same
+  ``ambition * (1 - loyalty)`` formula.
+- **Skim magnitude** is now ``uniform(0.02, 0.06) * food_stores *
+  (1 + (1 - loyalty))`` — a small fraction of *current* stores, scaled by
+  disloyalty. Replaces the fixed 60 food/cycle. The user's framing — "3%
+  off the top is less likely to be noticed" — is the design intent.
+- Detection-avoidance (small-and-steady vs. large-and-suspicious), inter-
+  sibling collusion, and superior skill-checks against subordinates are
+  deliberately deferred. Once siblings exist they become the natural
+  next layer.
+
+Sweep re-run (100 seeds × 300 ticks), Frontier deltas vs. previous build:
+
+| variable               | mean before | mean after | p10..p90 before | p10..p90 after |
+| ---------------------- | ----------: | ---------: | --------------- | -------------- |
+| garrison_strength      |     +69%    |    +34%    | +57..+80 (23pt) | +3..+79 (76pt) |
+| food_stores            |    +156%    |    +48%    | −23..+229       | −3..+106       |
+| unrest                 |    −39%     |    −20%    | −46..−34 (12pt) | −54..−0 (53pt) |
+
+Garrison spread widened **3.3×**, unrest spread widened **4.4×**. The
+"institutional rot" pattern still appears in 100% of seeds, but its
+*shape* now varies meaningfully across seeds — some runs Aldric lies
+heavily and gets away with it; some he lies less, the King sees the
+truth, and intervention happens earlier. That's the dynamic we wanted.
+
+Dismissals jumped 0.8 → 3.1 per seed, and `courier_undeliverable`
+events from 1.9 → 7.2 — the Province governor now visibly cycles
+through replacements, because *honest* reporting of a degrading region
+keeps tripping the strike counter while *forged* reporting of an even
+worse region (Frontier) keeps the corrupt commander in place. The
+"most-loyal-looking liar survives, honest manager is punished" dynamic
+is now reliably the dominant institutional story.
+
+One latent bug surfaced and was fixed in the same change: when the
+3-candidate pool was exhausted, `_dismiss_and_replace` would leave a
+subordinate pointing at a dismissed superior, and the next
+`decide_commander` would crash on `sim.actors[reports_to]`. Now reads
+defensively via `.get()` and skips urgent reports if the chain is
+broken. A larger candidate pool (or lazy instantiation per blueprint)
+would also address this from the other side.
+
 ### 2026-06-02 — Multi-seed sweep #1 (Claude Opus 4.7 via Claude Code)
 
 First aggregation across 100 seeds × 300 ticks of the Frontier scenario, via

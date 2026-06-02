@@ -27,21 +27,30 @@ def _sim(traits: Traits, tmp_path: Path) -> tuple[Simulation, Actor]:
 
 
 def test_disloyal_ambitious_actor_skims(tmp_path: Path) -> None:
+    # Skim is now stochastic — probability per decide is ambition*(1-loyalty).
+    # At (0.2, 0.8) that's 0.64, so over 50 cycles the chance of zero skims is
+    # vanishingly small (0.36**50 ≈ 1e-22). The test checks the population
+    # behaviour, not a single deterministic call.
     sim, actor = _sim(Traits(loyalty=0.2, ambition=0.8), tmp_path)
     before = sim.world.regions["Frontier"].state["food_stores"]
-    _maybe_skim(sim, actor)
+    for _ in range(50):
+        _maybe_skim(sim, actor)
     assert sim.world.regions["Frontier"].state["food_stores"] < before
 
 
 def test_loyal_actor_does_not_skim(tmp_path: Path) -> None:
+    # Hard gate at loyalty >= 0.4 — should never skim regardless of how many
+    # cycles fire.
     sim, actor = _sim(Traits(loyalty=0.9, ambition=0.8), tmp_path)
     before = sim.world.regions["Frontier"].state["food_stores"]
-    _maybe_skim(sim, actor)
+    for _ in range(50):
+        _maybe_skim(sim, actor)
     assert sim.world.regions["Frontier"].state["food_stores"] == before
 
 
 def test_unambitious_actor_does_not_skim(tmp_path: Path) -> None:
     sim, actor = _sim(Traits(loyalty=0.1, ambition=0.2), tmp_path)
     before = sim.world.regions["Frontier"].state["food_stores"]
-    _maybe_skim(sim, actor)
+    for _ in range(50):
+        _maybe_skim(sim, actor)
     assert sim.world.regions["Frontier"].state["food_stores"] == before

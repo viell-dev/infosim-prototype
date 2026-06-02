@@ -21,7 +21,8 @@ CMD_LOW_GARRISON = 600.0         # commander screams for reinforcement
 SUPPRESS_DURATION = 12
 SKIM_LOYALTY_THRESHOLD = 0.4
 SKIM_AMBITION_THRESHOLD = 0.5
-SKIM_FOOD_PER_CYCLE = 60.0
+SKIM_FRAC_MIN = 0.02              # baseline 2% of current stores per attempt
+SKIM_FRAC_MAX = 0.06              # up to 6%, before disloyalty multiplier
 KING_STRIKES_TO_DISMISS = 3      # consecutive bad reviews before sacking
 KING_REVIEW_UNREST = 60.0        # believed unrest above this counts as a strike
 KING_REVIEW_GARRISON = 800.0     # believed garrison below this counts as a strike
@@ -31,10 +32,16 @@ KING_REVIEW_GARRISON = 800.0     # believed garrison below this counts as a stri
 def _maybe_skim(sim: "Simulation", actor: "Actor") -> None:
     """A disloyal, ambitious actor quietly extracts food from their own region.
 
-    The region's true food drops. The actor's belief is NOT updated to match —
-    so their next observation tick will surface the loss honestly, but if they
-    forge their reports it never leaves the region. This creates the corruption
-    cascade the blueprint asks for.
+    Stochastic: probability per decide cycle is ``ambition * (1 - loyalty)``.
+    Magnitude is a small random fraction of current stores, scaled by how
+    disloyal the actor is — so a mildly corrupt actor skims rarely and lightly
+    while a deeply disloyal one skims often and harder. The region's true
+    food drops; the actor's belief is NOT updated to match — so the next
+    observation surfaces the loss honestly, but if they forge their reports
+    it never leaves the region.
+
+    The gating thresholds remain as a hard floor: very loyal or unambitious
+    actors never skim at all.
     """
     if actor.traits.loyalty >= SKIM_LOYALTY_THRESHOLD:
         return
@@ -44,7 +51,16 @@ def _maybe_skim(sim: "Simulation", actor: "Actor") -> None:
     if region is None:
         return
     available = region.state.get("food_stores", 0.0)
-    take = min(available, SKIM_FOOD_PER_CYCLE)
+    if available <= 0:
+        return
+
+    p = actor.traits.ambition * (1.0 - actor.traits.loyalty)
+    if sim.rng.random() >= p:
+        return
+
+    disloyalty = 1.0 - actor.traits.loyalty
+    frac = sim.rng.uniform(SKIM_FRAC_MIN, SKIM_FRAC_MAX) * (1.0 + disloyalty)
+    take = min(available, available * frac)
     if take <= 0:
         return
     region.state["food_stores"] = available - take
@@ -56,6 +72,7 @@ def _maybe_skim(sim: "Simulation", actor: "Actor") -> None:
         actor=actor.id,
         region=actor.region,
         amount=take,
+        fraction=frac,
     )
 
 
@@ -323,7 +340,12 @@ def decide_commander(sim: "Simulation", actor: "Actor") -> None:
     # 2. autonomous urgent reports — these jump cadence and go straight to the governor
     if actor.reports_to is None:
         return
-    superior = sim.actors[actor.reports_to]
+    superior = sim.actors.get(actor.reports_to)
+    if superior is None:
+        # Superior was dismissed and no replacement was available — the
+        # commander effectively has no chain of command. Skip urgent reports
+        # rather than crashing; the next appointment will rewire upward.
+        return
 
     own_food = actor.known.get(sim.subject_for(actor.region, "food_stores"))
     if own_food and own_food.value < CMD_LOW_FOOD:
