@@ -6,8 +6,25 @@ from pathlib import Path
 from infosim.actors import Actor, Traits
 from infosim.logging_setup import EventLog
 from infosim.policy import maybe_initiate_audit
+from infosim.scheduler import EventKind
 from infosim.sim import Simulation
 from infosim.world import Location, World
+
+
+def _silence_push_channel(sim: Simulation) -> None:
+    """Bootstrap actor DECIDE cadences but suppress ambient REPORT/OBSERVE so
+    the audit channel can be tested in isolation. Without this, cmd's t=0
+    push report would reach gov at t=6 and overwrite the very cached
+    belief we want gov's audit reply to reflect.
+    """
+    import heapq
+    sim._bootstrap_actor_cadences()
+    sim._bootstrapped = True
+    sim.scheduler._heap = [
+        qe for qe in sim.scheduler._heap
+        if qe.event.kind not in (EventKind.REPORT, EventKind.OBSERVE)
+    ]
+    heapq.heapify(sim.scheduler._heap)
 
 
 def _three_chain(tmp_path: Path, gov_loyalty: float = 0.9, cmd_loyalty: float = 0.9) -> Simulation:
@@ -67,30 +84,55 @@ def test_audit_round_trip_loyal_chain(tmp_path: Path) -> None:
     assert king.pending_requests == {}
 
 
-def test_disloyal_relay_does_not_forward(tmp_path: Path) -> None:
-    # Governor loyalty 0.2 → below REQUEST_TRUST_THRESHOLD → protective mode:
-    # answers from own cache instead of forwarding to the commander.
+def test_disloyal_relay_protects_subordinate(tmp_path: Path) -> None:
+    """A disloyal relay (loyalty < REQUEST_TRUST_THRESHOLD) must:
+      1. NOT forward the audit to the subordinate (protective mode), AND
+      2. answer the king from its own cached belief about that subordinate,
+         which can be politically inflated relative to the truth on the
+         ground.
+
+    Push channel suppressed so cmd's t=0 report can't seep into gov's cache
+    before the audit fires. We seed gov's cache with a deliberately-inflated
+    value to model "Mira has been told a comfortable story for weeks."
+    """
     sim = _three_chain(tmp_path, gov_loyalty=0.2, cmd_loyalty=0.95)
     king = sim.actors["king"]
     gov = sim.actors["gov"]
     cmd = sim.actors["cmd"]
 
-    maybe_initiate_audit(sim, king, gov, cmd)
-    # Drive past gov's first decide cycle so the inbox processes.
-    sim.run_until(15.0)
+    # gov "knows" cmd's garrison is enormous; the actual truth (cmd.stats)
+    # is 700.
+    gov.update_belief("cmd.garrison_strength", 2000.0, 0.5, 0.0, ["cmd", "gov"])
 
-    # Inspect the JSONL: there should be exactly one request_dispatched
-    # event (king→gov, the original audit), no forwarded gov→cmd request.
+    maybe_initiate_audit(sim, king, gov, cmd)
+    _silence_push_channel(sim)
+    sim.run_until(20.0)
+
+    # (1) gov did not forward.
     forwarded = [
         ev for ev in sim.event_log.events
         if ev["kind"] == "request_dispatched" and ev["actor"] == "gov"
     ]
-    assert forwarded == []
-    # And the original audit got a response (king's pending entry cleared).
-    assert king.pending_requests == {}
+    assert forwarded == [], f"disloyal gov should not forward, got {forwarded}"
+
+    # (2) king ended up with gov's inflated cache value (or a value forged
+    #     even higher) — definitely NOT close to the truth of 700.
+    belief = king.known.get("cmd.garrison_strength")
+    assert belief is not None, "king should have received a response"
+    assert belief.value >= 2000.0 - 1e-6, (
+        f"king's belief {belief.value:.1f} should reflect gov's inflated "
+        f"cache (2000) — protective relay failed"
+    )
+    # Truth is 700; gov said 2000+. The king is now sitting on a +185%
+    # over-estimate, with no idea he was lied to.
+    assert belief.value > 1500.0  # double-check the divergence is real
 
 
 def test_loyal_relay_does_forward(tmp_path: Path) -> None:
+    """A loyal relay should forward the audit downstream rather than
+    answering from its own (potentially stale) cache. Exactly one forwarded
+    request from gov to cmd should appear in the log.
+    """
     sim = _three_chain(tmp_path, gov_loyalty=0.9, cmd_loyalty=0.95)
     king = sim.actors["king"]
     gov = sim.actors["gov"]
@@ -99,13 +141,12 @@ def test_loyal_relay_does_forward(tmp_path: Path) -> None:
     maybe_initiate_audit(sim, king, gov, cmd)
     sim.run_until(15.0)
 
-    # Loyal gov forwarded to cmd.
     forwarded = [
         ev for ev in sim.event_log.events
         if ev["kind"] == "request_dispatched" and ev["actor"] == "gov"
         and ev.get("recipient") == "cmd"
     ]
-    assert len(forwarded) == 1
+    assert len(forwarded) == 1, f"expected 1 forwarded request, got {len(forwarded)}"
 
 
 def test_request_timeout_triggers_when_no_response(tmp_path: Path) -> None:
