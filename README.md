@@ -278,16 +278,23 @@ buildup, forest-elf tension, Kingsguard training/aid, and regional tax
 multiplier changes.
 
 Added governance churn from the scenario doc: family ties are generated and
-logged, every occupied office has a small per-turn death risk, seed `3` kills
-the King at `t=352` in a 500-tick run, and succession passes through the
-strongest Royal/Noble score. Revoked regions now return to the King directly,
-then either stay in crown hands long enough to raise Noble distrust or get
+logged, every occupied office has a small per-turn death risk, seed `6` kills
+the King in a 500-tick run, and succession passes through the strongest
+Royal/Noble score. Revoked regions now return to the King directly, then
+either stay in crown hands long enough to raise Noble distrust or get
 reassigned to another Noble after deliberation.
 
+A follow-up pass filled the remaining weak scenario hooks: settlements can
+upgrade and roll durable defense quality from dwarfs, production, materials,
+competence, and geography; the King can send crown aid, forgive taxes, and lend
+the national army to threatened Nobles; prejudiced forest-border Nobles can
+misreport forest-elf incidents as monster pressure.
+
 Validation: `just check` passes 48 tests. Additional seed samples confirmed
-seed `1` emits revocation and reassignment by 260 ticks, seed `3` emits
+seed `1` emits revocation and reassignment by 320 ticks, seed `6` emits
 `actor_death` for `king` followed by `succession`, and 240-500 tick runs emit
-trade, migration, training, monster attacks, forest-elf incidents, and office
+trade, migration, training, monster attacks, forest-elf incidents, forest-elf
+misreports, settlement upgrades, crown aid, tax forgiveness, and office
 succession.
 
 ### 2026-06-03 — Isekai kingdom grid scenario implemented (GPT-5 via Codex)

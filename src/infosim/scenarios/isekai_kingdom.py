@@ -37,6 +37,14 @@ SETTLEMENT_CAPACITY = {
     "town": 1100,
     "city": 2600,
 }
+SETTLEMENT_UPGRADES = {
+    "village": "town",
+    "town": "city",
+}
+SETTLEMENT_UPGRADE_COSTS = {
+    "town": {"lumber": 110.0, "ore": 45.0, "wares": 70.0, "money": 160.0},
+    "city": {"lumber": 260.0, "ore": 160.0, "wares": 190.0, "money": 430.0},
+}
 
 
 RULESET = Ruleset(
@@ -976,6 +984,10 @@ def _init_kingdom_state(sim: Simulation, setup: KingdomSetup) -> None:
             "tax_exempt_identity": exempt_identity,
             "last_tax_multiplier": profile.stats.get("tax_multiplier", 1.0),
             "last_specialization_time": -999.0,
+            "last_upgrade_time": -999.0,
+            "last_aid_time": -999.0,
+            "last_tax_forgiven_time": -999.0,
+            "last_army_aid_time": -999.0,
         }
         mayor = sim.actors.get(_mayor_id(profile.coord))
         if mayor is not None:
@@ -1039,6 +1051,7 @@ def _kingdom_turn(sim: Simulation, setup: KingdomSetup, interval: float) -> None
         _update_tax_policy(sim, setup, coord, region_state, mayor)
         _maybe_found_or_refocus_settlement(sim, profile, region_state, mayor)
         _settlement_input_output(sim, profile, region_state, mayor)
+        _settlement_upgrade_step(sim, profile, region_state, mayor)
         _migration_step(sim, setup, coord, region_state, mayor)
         _trade_step(sim, setup, coord, region_state, mayor)
         _military_training_step(sim, coord, mayor)
@@ -1046,6 +1059,7 @@ def _kingdom_turn(sim: Simulation, setup: KingdomSetup, interval: float) -> None
         _forest_elf_step(sim, setup, coord, region_state, mayor)
         region_state["recent_attacks"] = max(0.0, region_state["recent_attacks"] - 0.25)
     _king_military_step(sim)
+    _king_aid_step(sim)
     _revocation_step(sim, setup)
     _mortality_step(sim, setup)
     sim.schedule_scripted(
@@ -1261,6 +1275,90 @@ def _settlement_input_output(
             )
         elif population > 0:
             mayor.stats["unrest"] = mayor.stats.get("unrest", 0.0) + 1.0
+
+
+def _settlement_upgrade_step(
+    sim: Simulation,
+    profile: RegionProfile,
+    region_state: dict,
+    mayor: Actor,
+) -> None:
+    if sim.now - region_state["last_upgrade_time"] < 80.0:
+        return
+    candidates = []
+    for settlement in region_state["settlements"]:
+        next_size = SETTLEMENT_UPGRADES.get(settlement["size"])
+        if next_size is None:
+            continue
+        capacity = SETTLEMENT_CAPACITY[settlement["size"]]
+        pressure = settlement["population"] / max(1.0, capacity)
+        if pressure < 0.86:
+            continue
+        costs = SETTLEMENT_UPGRADE_COSTS[next_size]
+        if any(mayor.stats.get(stat, 0.0) < amount for stat, amount in costs.items()):
+            continue
+        candidates.append((pressure, settlement, next_size, costs))
+    if not candidates:
+        return
+    pressure, settlement, next_size, costs = max(candidates, key=lambda item: item[0])
+    chance = min(0.42, 0.10 + (pressure - 0.86) * 0.55 + mayor.traits.ambition * 0.08)
+    if sim.rng.random() >= chance:
+        return
+    for stat, amount in costs.items():
+        mayor.stats[stat] -= amount
+    before_size = settlement["size"]
+    before_defense = settlement["defense_quality"]
+    settlement["size"] = next_size
+    settlement["defense_quality"] = _upgrade_defense_quality(
+        sim,
+        profile,
+        region_state,
+        mayor,
+        settlement,
+        before_defense,
+    )
+    region_state["last_upgrade_time"] = sim.now
+    sim.event_log.emit(
+        sim.now,
+        "settlement_upgraded",
+        f"[{profile.coord}] {settlement['name']} upgrades {before_size} -> {next_size} "
+        f"with defense {before_defense:.2f} -> {settlement['defense_quality']:.2f}",
+        actor=mayor.id,
+        location=profile.coord,
+        settlement=settlement["name"],
+        before_size=before_size,
+        after_size=next_size,
+        before_defense=before_defense,
+        after_defense=settlement["defense_quality"],
+    )
+
+
+def _upgrade_defense_quality(
+    sim: Simulation,
+    profile: RegionProfile,
+    region_state: dict,
+    mayor: Actor,
+    settlement: dict,
+    previous: float,
+) -> float:
+    production_count = sum(1 for s in region_state["settlements"] if s["specialization"] == "Production")
+    dwarf_share = mayor.stats.get("dwarf_pops", 0.0) / max(1.0, mayor.stats.get("population", 0.0))
+    resource_bonus = min(
+        0.22,
+        (
+            mayor.stats.get("lumber", 0.0) / 1800.0
+            + mayor.stats.get("ore", 0.0) / 1400.0
+            + mayor.stats.get("wares", 0.0) / 1100.0
+            + mayor.stats.get("money", 0.0) / 3000.0
+        ),
+    )
+    builder_bonus = dwarf_share * 0.20 + production_count * 0.035
+    if settlement["specialization"] == "Production":
+        builder_bonus += 0.05
+    competence_bonus = mayor.traits.competence * 0.10
+    geography_bonus = profile.geography["mining"] * 0.025 + profile.geography["trade"] * 0.015
+    roll = sim.rng.uniform(0.02, 0.12)
+    return min(1.0, max(previous, previous + roll + resource_bonus + builder_bonus + competence_bonus + geography_bonus))
 
 
 def _migration_step(
@@ -1588,6 +1686,23 @@ def _forest_elf_step(
         forest_tension=tension,
         owner=owner.id if owner is not None else None,
     )
+    if owner is None:
+        return
+    misread_chance = owner.prejudice.get("elf", 0.0) * 0.9 + owner.traits.ambition * 0.18
+    if sim.rng.random() >= min(0.72, misread_chance):
+        return
+    false_pressure = tension * sim.rng.uniform(0.18, 0.42)
+    mayor.stats["monster_pressure"] = mayor.stats.get("monster_pressure", 0.0) + false_pressure
+    sim.event_log.emit(
+        sim.now,
+        "forest_elf_misreported",
+        f"[{coord}] {owner.display_name} frames forest-elf warnings as monster activity",
+        actor=owner.id,
+        location=coord,
+        mayor=mayor.id,
+        false_monster_pressure=false_pressure,
+        owner_prejudice=owner.prejudice.get("elf", 0.0),
+    )
 
 
 def _king_military_step(sim: Simulation) -> None:
@@ -1623,6 +1738,98 @@ def _king_military_step(sim: Simulation) -> None:
                 recipient=actor.id,
                 amount=aid,
             )
+def _king_aid_step(sim: Simulation) -> None:
+    king = sim.actors.get("king")
+    if king is None:
+        return
+    state = sim.scenario_state[KINGDOM_STATE_KEY]
+    for coord, region_state in state["regions"].items():
+        mayor = sim.actors.get(_mayor_id(coord))
+        if mayor is None:
+            continue
+        owner = sim.actors.get(region_state["owner_id"])
+        if (
+            owner is not None
+            and owner.id != "king"
+            and mayor.stats.get("monster_pressure", 0.0) > 48.0
+            and king.stats.get("soldiers", 0.0) > 260.0
+            and sim.now - region_state["last_army_aid_time"] >= 64.0
+        ):
+            amount = min(king.stats["soldiers"] * 0.035, 38.0)
+            king.stats["soldiers"] -= amount
+            owner.stats["soldiers"] = owner.stats.get("soldiers", 0.0) + amount
+            owner.stats["noble_distrust"] = max(0.0, owner.stats.get("noble_distrust", 0.0) - 1.5)
+            region_state["last_army_aid_time"] = sim.now
+            sim.event_log.emit(
+                sim.now,
+                "national_army_lent",
+                f"[{coord}] King lends {amount:.0f} standing soldiers to {owner.display_name}",
+                actor=king.id,
+                recipient=owner.id,
+                location=coord,
+                amount=amount,
+            )
+        population = max(1.0, mayor.stats.get("population", 0.0))
+        if sim.now - region_state["last_aid_time"] >= 48.0:
+            for stat, reserve_factor, amount_factor in (
+                ("food_stores", 0.20, 0.14),
+                ("herbs", 0.014, 0.024),
+                ("wares", 0.020, 0.026),
+            ):
+                if mayor.stats.get(stat, 0.0) >= population * reserve_factor:
+                    continue
+                available = king.stats.get(stat, 0.0)
+                if available <= population * amount_factor:
+                    continue
+                amount = min(available * 0.035, population * amount_factor, 220.0)
+                if amount <= 1.0:
+                    continue
+                king.stats[stat] -= amount
+                mayor.stats[stat] = mayor.stats.get(stat, 0.0) + amount
+                if owner is not None:
+                    owner.stats["noble_distrust"] = max(
+                        0.0,
+                        owner.stats.get("noble_distrust", 0.0) - 0.8,
+                    )
+                region_state["last_aid_time"] = sim.now
+                sim.event_log.emit(
+                    sim.now,
+                    "crown_aid",
+                    f"[{coord}] crown sends {amount:.0f} {stat}",
+                    actor=king.id,
+                    recipient=mayor.id,
+                    location=coord,
+                    stat=stat,
+                    amount=amount,
+                )
+                break
+        if sim.now - region_state["last_tax_forgiven_time"] < 64.0:
+            continue
+        shortage = (
+            mayor.stats.get("food_stores", 0.0) < population * 0.18
+            or mayor.stats.get("wares", 0.0) < population * 0.016
+        )
+        if (
+            not shortage
+            or mayor.stats.get("tax_multiplier", 1.0) <= 0.78
+            or sim.rng.random() > 0.45 + king.traits.honesty * 0.25
+        ):
+            continue
+        old_tax = mayor.stats["tax_multiplier"]
+        new_tax = max(0.45, old_tax - 0.18)
+        mayor.stats["tax_multiplier"] = new_tax
+        region_state["last_tax_multiplier"] = new_tax
+        region_state["last_tax_forgiven_time"] = sim.now
+        sim.event_log.emit(
+            sim.now,
+            "tax_forgiven",
+            f"[{coord}] King forgives arrears and lowers local tax {old_tax:.2f} -> {new_tax:.2f}",
+            actor=king.id,
+            recipient=mayor.id,
+            location=coord,
+            previous=old_tax,
+            tax_multiplier=new_tax,
+        )
 
 
 def _revocation_step(sim: Simulation, setup: KingdomSetup) -> None:

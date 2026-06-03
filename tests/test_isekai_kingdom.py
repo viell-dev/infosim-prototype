@@ -112,7 +112,7 @@ def test_kingdom_run_emits_setup_economy_politics_and_shocks(tmp_path) -> None:
 
 
 def test_kingdom_recurring_systems_include_revocation_and_reassignment(tmp_path) -> None:
-    base = run(seed=1, ticks=260, runs_dir=tmp_path)
+    base = run(seed=1, ticks=400, runs_dir=tmp_path)
     events = _read_events(base.with_suffix(".jsonl"))
     kinds = {str(ev["kind"]) for ev in events}
     revocations = [ev for ev in events if ev["kind"] == "title_revoked"]
@@ -121,8 +121,13 @@ def test_kingdom_recurring_systems_include_revocation_and_reassignment(tmp_path)
     assert {
         "settlement_founded",
         "settlement_refocus",
+        "settlement_upgraded",
+        "crown_aid",
+        "tax_forgiven",
+        "national_army_lent",
         "monster_attack",
         "forest_elf_incident",
+        "forest_elf_misreported",
         "warrior_emergence",
         "actor_death",
         "office_succession",
@@ -139,8 +144,8 @@ def test_kingdom_recurring_systems_include_revocation_and_reassignment(tmp_path)
     )
 
 
-def test_kingdom_seed_three_can_kill_the_king_and_trigger_succession(tmp_path) -> None:
-    base = run(seed=3, ticks=500, runs_dir=tmp_path)
+def test_kingdom_seed_six_can_kill_the_king_and_trigger_succession(tmp_path) -> None:
+    base = run(seed=6, ticks=500, runs_dir=tmp_path)
     events = _read_events(base.with_suffix(".jsonl"))
     king_deaths = [
         ev for ev in events
@@ -152,6 +157,7 @@ def test_kingdom_seed_three_can_kill_the_king_and_trigger_succession(tmp_path) -
     assert successions
     assert successions[0]["time"] >= king_deaths[0]["time"]
     assert successions[0]["source_title"] in {"Royal Noble", "Noble", "emergency council"}
+    assert any(ev["kind"] == "forest_elf_misreported" for ev in events)
 
 
 def test_kingdom_map_replay_uses_seeded_initial_state(tmp_path) -> None:
