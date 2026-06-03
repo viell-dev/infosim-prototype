@@ -6,6 +6,7 @@ from pathlib import Path
 from infosim.actors import Actor, Traits
 from infosim.logging_setup import EventLog
 from infosim.policies.info_requests import maybe_initiate_audit
+from infosim.scenarios.frontier import RULESET
 from infosim.scheduler import EventKind
 from infosim.sim import Simulation
 from infosim.world import Location, World
@@ -56,6 +57,7 @@ def _three_chain(tmp_path: Path, gov_loyalty: float = 0.9, cmd_loyalty: float = 
     sim = Simulation(
         world=world, actors={"king": king, "gov": gov, "cmd": cmd},
         rng=rng, event_log=log,
+        ruleset=RULESET,
         bus_loss_prob=0.0, bus_jitter_frac=0.0,
     )
     return sim

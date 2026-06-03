@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING
 from ..requests import InfoRequest, InfoResponse, PendingRequest
 from ..reports import forge_value
 from ..scheduler import Event, EventKind
-from ..world import VARIABLES
 from .constants import REQUEST_DEADLINE, REQUEST_TRUST_THRESHOLD
 from .hierarchy import _subordinates
 
@@ -168,32 +167,47 @@ def _split_subjects(
     return mine, delegate
 
 
-def _answer_from_belief(actor: "Actor", subjects: list[str], rng) -> dict[str, tuple[float, float]]:
+def _maybe_forge_answer(sim: "Simulation", actor: "Actor", subject: str, value: float) -> float:
+    """Apply the bad-news forgery dynamic to a single answer value, driven by
+    the ruleset's stat polarity. Returns the (possibly fabricated) value.
+
+    NOTE: the literal 1000/20 bad-news cutoffs are legacy medieval magic that
+    step 2 replaces with the ruleset's per-stat bad_news_thresholds (which is a
+    deliberate behavior change re-baselined there). Kept verbatim here so this
+    relocation step changes no run output.
+    """
+    if actor.traits.loyalty >= 0.85:
+        return value
+    stat = subject.split(".", 1)[1]
+    spec = sim.ruleset.stats.get(stat)
+    if spec is None:
+        return value
+    is_bad_news = (
+        (spec.polarity == +1 and value < 1000.0) or
+        (spec.polarity == -1 and value > 20.0)
+    )
+    if not is_bad_news:
+        return value
+    disloyalty = 1.0 - actor.traits.loyalty
+    forge_prob = actor.traits.ambition * disloyalty * disloyalty
+    if sim.rng.random() < forge_prob:
+        severity = max(0.0, min(1.0, disloyalty * sim.rng.uniform(0.5, 1.5)))
+        return forge_value(value, stat, severity, sim.ruleset.stats)
+    return value
+
+
+def _answer_from_belief(sim: "Simulation", actor: "Actor", subjects: list[str]) -> dict[str, tuple[float, float]]:
     """Build an answers dict from cached beliefs, applying the same forgery
     logic that report-time uses. If the actor is the *subject* of a
     question, they may lie about their own stats just as they would on a
     pushed report.
     """
     out: dict[str, tuple[float, float]] = {}
-    disloyalty = 1.0 - actor.traits.loyalty
-    forge_prob = actor.traits.ambition * disloyalty * disloyalty
     for subject in subjects:
         belief = actor.known.get(subject)
         if belief is None:
             continue
-        value = belief.value
-        if actor.traits.loyalty < 0.85:
-            stat = subject.split(".", 1)[1]
-            spec = VARIABLES.get(stat)
-            if spec is not None:
-                polarity = spec.polarity
-                is_bad_news = (
-                    (polarity == +1 and value < 1000.0) or
-                    (polarity == -1 and value > 20.0)
-                )
-                if is_bad_news and rng.random() < forge_prob:
-                    severity = max(0.0, min(1.0, disloyalty * rng.uniform(0.5, 1.5)))
-                    value = forge_value(value, stat, severity)
+        value = _maybe_forge_answer(sim, actor, subject, belief.value)
         out[subject] = (value, belief.confidence)
     return out
 
@@ -245,13 +259,13 @@ def _process_request_inbox(sim: "Simulation", actor: "Actor") -> None:
                     parent_from_actor=sender_id,
                 )
             if mine:
-                answers = _answer_from_belief(actor, mine, sim.rng)
+                answers = _answer_from_belief(sim, actor, mine)
                 response = InfoResponse(
                     correlation_id=req.correlation_id, answers=answers,
                 )
                 _dispatch_response(sim, actor, sender_id, response)
         else:
-            answers = _answer_from_belief(actor, mine, sim.rng)
+            answers = _answer_from_belief(sim, actor, mine)
             response = InfoResponse(correlation_id=req.correlation_id, answers=answers)
             _dispatch_response(sim, actor, sender_id, response)
 
@@ -287,22 +301,8 @@ def handle_info_response(
         # An honest relayer forwards verbatim; a disloyal one may shade
         # values on the way back using the same forgery dynamic.
         relayed_answers: dict[str, tuple[float, float]] = {}
-        disloyalty = 1.0 - recipient.traits.loyalty
-        forge_prob = recipient.traits.ambition * disloyalty * disloyalty
         for subject, (val, conf) in response.answers.items():
-            value = val
-            if recipient.traits.loyalty < 0.85:
-                stat = subject.split(".", 1)[1]
-                spec = VARIABLES.get(stat)
-                if spec is not None:
-                    polarity = spec.polarity
-                    is_bad_news = (
-                        (polarity == +1 and value < 1000.0) or
-                        (polarity == -1 and value > 20.0)
-                    )
-                    if is_bad_news and sim.rng.random() < forge_prob:
-                        severity = max(0.0, min(1.0, disloyalty * sim.rng.uniform(0.5, 1.5)))
-                        value = forge_value(value, stat, severity)
+            value = _maybe_forge_answer(sim, recipient, subject, val)
             relayed_answers[subject] = (value, conf)
         upstream_response = InfoResponse(
             correlation_id=pending.parent_correlation_id,
@@ -369,6 +369,7 @@ def maybe_initiate_audit(sim: "Simulation", king: "Actor", sub: "Actor", deeper:
     targets = [
         sim.subject_for(deeper.id, s)
         for s in (sim.defense_stat, sim.supply_stat, sim.threat_stat)
+        if s is not None
     ]
     already_pending = any(
         any(s in p.subjects for s in targets)

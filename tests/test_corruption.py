@@ -6,6 +6,7 @@ from pathlib import Path
 from infosim.actors import Actor, Traits
 from infosim.logging_setup import EventLog
 from infosim.policies.corruption import _maybe_skim
+from infosim.scenarios.frontier import RULESET
 from infosim.sim import Simulation
 from infosim.world import Location, World
 
@@ -23,6 +24,7 @@ def _sim(traits: Traits, tmp_path: Path) -> tuple[Simulation, Actor]:
     log.open()
     sim = Simulation(
         world=world, actors={"cmd": actor}, rng=rng, event_log=log,
+        ruleset=RULESET,
         bus_loss_prob=0.0, bus_jitter_frac=0.0,
     )
     return sim, actor

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass, field
+from typing import Mapping
 
 from .actors import Actor
-from .world import VARIABLES
+from .ruleset import StatSpec
 
 
 @dataclass
@@ -23,15 +24,19 @@ def _variable_of(subject: str) -> str:
     return subject.split(".", 1)[1]
 
 
-def forge_value(true_belief: float, variable: str, severity: float) -> float:
+def forge_value(
+    true_belief: float,
+    variable: str,
+    severity: float,
+    stats: Mapping[str, StatSpec],
+) -> float:
     """Replace a report value with a politically convenient lie.
 
     severity (0..1) scales how far the forged value moves from the actor's
     actual belief toward an "everything is fine" target. severity=1.0 means
     fully fabricated; severity=0.5 means a heavy lean.
     """
-    from .world import VARIABLES
-    polarity = VARIABLES[variable].polarity
+    polarity = stats[variable].polarity
     # "Fine" target: for positive polarity (garrison/food) push value high;
     # for negative polarity (unrest) push value low.
     if polarity == +1:
@@ -60,10 +65,15 @@ def observe(actor: Actor, subject: str, true_value: float, rng: random.Random) -
     )
 
 
-def relay(actor: Actor, incoming: Report, rng: random.Random) -> Report:
+def relay(
+    actor: Actor,
+    incoming: Report,
+    rng: random.Random,
+    stats: Mapping[str, StatSpec],
+) -> Report:
     """Apply this actor's transformation when forwarding a report upward."""
     val = incoming.estimated_value
-    polarity = VARIABLES[_variable_of(incoming.subject)].polarity
+    polarity = stats[_variable_of(incoming.subject)].polarity
 
     # interpretation_bias: low education -> noisier numbers
     interp_scale = (1.0 - actor.traits.education) * 0.05 * max(abs(val), 1.0)

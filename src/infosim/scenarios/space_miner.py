@@ -10,8 +10,75 @@ from ..logging_setup import EventLog
 from ..orders import OrderKind
 from ..personnel import Candidate
 from ..policies.orders import _dispatch_order
+from ..ruleset import (
+    DecaySpec,
+    ProductionSpec,
+    RoleSpec,
+    Ruleset,
+    StatSpec,
+    TaxSpec,
+)
 from ..sim import Simulation
 from ..world import Location, World
+
+
+# --- ruleset: the space-mining genre as data ---------------------------------
+# ore / ships / population are "good news"; alien_presence is "bad news". The
+# Captain mines ore from ships and taxes it upward; the Manager consumes ore by
+# population and taxes a smaller share; defense spends ships against aliens.
+RULESET = Ruleset(
+    stats={
+        "ore":            StatSpec("ore",            polarity=+1),
+        "ships":          StatSpec("ships",          polarity=+1),
+        "population":     StatSpec("population",     polarity=+1),
+        "alien_presence": StatSpec("alien_presence", polarity=-1),
+    },
+    defense_stat="ships",
+    supply_stat="ore",
+    threat_stat="alien_presence",
+    bad_news_thresholds={
+        "ore": 500.0,
+        "ships": 8.0,
+        "alien_presence": 20.0,
+    },
+    roles={
+        "CEO": RoleSpec(
+            title="CEO",
+            behaviors=("issue_orders", "apex_defense_orders"),
+            thresholds={
+                "low_defense": 7.0,
+                "low_supply": 1200.0,
+                "high_threat": 35.0,
+                "review_threat": 60.0,
+                "review_defense": 800.0,
+            },
+        ),
+        "Manager": RoleSpec(
+            title="Manager",
+            behaviors=(
+                "skim", "execute_orders", "autonomous_suppress",
+                "consume", "tax", "local_defense_orders",
+            ),
+            decay=(DecaySpec(stat="ore", rate=0.08, driver_stat="population"),),
+            tax=(TaxSpec(stat="ore", fraction=0.10, label="manager_tax"),),
+            thresholds={"autonomous_threat": 25.0},
+        ),
+        "Captain": RoleSpec(
+            title="Captain",
+            behaviors=("skim", "produce", "tax"),
+            production=(
+                ProductionSpec(output_stat="ore", driver_stat="ships",
+                               rate=18.0, competence_curve=0.5),
+            ),
+            tax=(TaxSpec(stat="ore", fraction=0.25, label="ore_tax"),),
+        ),
+        "Commander": RoleSpec(
+            title="Commander",
+            behaviors=("skim", "execute_orders", "urgent_reports", "defend"),
+            thresholds={"leaf_low_supply": 150.0, "leaf_low_defense": 3.0},
+        ),
+    },
+)
 
 
 def build() -> tuple[World, dict[str, Actor]]:
@@ -274,12 +341,10 @@ def run(seed: int, ticks: int, runs_dir: Path) -> Path:
         actors=actors,
         rng=rng,
         event_log=log,
+        ruleset=RULESET,
         candidate_pool=candidate_pool(),
         bus_loss_prob=0.06,
         bus_jitter_frac=0.25,
-        defense_stat="ships",
-        supply_stat="ore",
-        threat_stat="alien_presence",
         apex_low_defense=7.0,
         apex_low_supply=1200.0,
         apex_high_threat=35.0,

@@ -29,6 +29,7 @@ from ..logging_setup import EventLog
 from ..personnel import Candidate
 from ..sim import Simulation
 from ..world import Location, World
+from .frontier import RULESET
 
 
 def build() -> tuple[World, dict[str, Actor]]:
@@ -153,6 +154,7 @@ def run(seed: int, ticks: int, runs_dir: Path) -> Path:
     log.open()
     sim = Simulation(
         world=world, actors=actors, rng=rng, event_log=log,
+        ruleset=RULESET,
         candidate_pool=candidate_pool(),
         bus_loss_prob=0.08, bus_jitter_frac=0.25,
     )

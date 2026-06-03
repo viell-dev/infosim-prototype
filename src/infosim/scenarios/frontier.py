@@ -8,8 +8,54 @@ from pathlib import Path
 from ..actors import Actor, Traits
 from ..logging_setup import EventLog
 from ..personnel import Candidate
+from ..ruleset import RoleSpec, Ruleset, StatSpec
 from ..sim import Simulation
 from ..world import Location, World
+
+
+# --- ruleset: the medieval genre as data -------------------------------------
+# garrison_strength / food_stores are "good news" (higher better); unrest is
+# "bad news" (higher worse). Roles compose generic behaviors; thresholds drive
+# the King's orders/reviews, the Governor's autonomous suppression, and the
+# Commander's urgent reports.
+RULESET = Ruleset(
+    stats={
+        "garrison_strength": StatSpec("garrison_strength", polarity=+1),
+        "food_stores":       StatSpec("food_stores",       polarity=+1),
+        "unrest":            StatSpec("unrest",            polarity=-1),
+    },
+    defense_stat="garrison_strength",
+    supply_stat="food_stores",
+    threat_stat="unrest",
+    bad_news_thresholds={
+        "garrison_strength": 1000.0,
+        "food_stores": 1000.0,
+        "unrest": 20.0,
+    },
+    roles={
+        "King": RoleSpec(
+            title="King",
+            behaviors=("issue_orders",),
+            thresholds={
+                "low_defense": 1000.0,
+                "low_supply": 800.0,
+                "high_threat": 50.0,
+                "review_threat": 60.0,
+                "review_defense": 800.0,
+            },
+        ),
+        "Governor": RoleSpec(
+            title="Governor",
+            behaviors=("skim", "execute_orders", "autonomous_suppress"),
+            thresholds={"autonomous_threat": 75.0},
+        ),
+        "Commander": RoleSpec(
+            title="Commander",
+            behaviors=("skim", "execute_orders", "urgent_reports", "defend"),
+            thresholds={"leaf_low_supply": 500.0, "leaf_low_defense": 600.0},
+        ),
+    },
+)
 
 
 def build() -> tuple[World, dict[str, Actor]]:
@@ -326,6 +372,7 @@ def run(seed: int, ticks: int, runs_dir: Path) -> Path:
 
     sim = Simulation(
         world=world, actors=actors, rng=rng, event_log=log,
+        ruleset=RULESET,
         candidate_pool=candidate_pool(),
         bus_loss_prob=0.08, bus_jitter_frac=0.25,
     )

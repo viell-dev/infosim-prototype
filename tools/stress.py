@@ -28,6 +28,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from infosim.actors import Traits  # noqa: E402
 from infosim.logging_setup import EventLog  # noqa: E402
 from infosim.scenarios.frontier import (  # noqa: E402
+    RULESET,
     build,
     candidate_pool,
     scripted_events,
@@ -89,6 +90,7 @@ def run_one(seed: int, ticks: int, profile: Profile) -> dict:
     log = _null_log()
     sim = Simulation(
         world=world, actors=actors, rng=rng, event_log=log,
+        ruleset=RULESET,
         candidate_pool=candidate_pool(),
         bus_loss_prob=profile.loss, bus_jitter_frac=profile.jitter,
     )

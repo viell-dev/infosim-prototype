@@ -4,6 +4,9 @@ import random
 
 from infosim.actors import Actor, Traits
 from infosim.reports import observe, relay
+from infosim.scenarios.frontier import RULESET
+
+STATS = RULESET.stats
 
 
 def _actor(**traits: float) -> Actor:
@@ -39,7 +42,7 @@ def test_fear_inflates_positive_polarity_at_relay() -> None:
     upstream = _actor(competence=1.0, honesty=1.0, fear=0.0, education=1.0)
     incoming = observe(upstream, "R.garrison_strength", 1000.0, rng)
     fearful_relay = _actor(competence=1.0, honesty=1.0, fear=1.0, education=1.0)
-    relayed = relay(fearful_relay, incoming, rng)
+    relayed = relay(fearful_relay, incoming, rng, STATS)
     # garrison_strength polarity=+1 (low is bad) → fear pushes value up.
     assert relayed.estimated_value > 1000.0
 
@@ -49,7 +52,7 @@ def test_fear_understates_negative_polarity_at_relay() -> None:
     upstream = _actor(competence=1.0, honesty=1.0, fear=0.0, education=1.0)
     incoming = observe(upstream, "R.unrest", 100.0, rng)
     fearful_relay = _actor(competence=1.0, honesty=1.0, fear=1.0, education=1.0)
-    relayed = relay(fearful_relay, incoming, rng)
+    relayed = relay(fearful_relay, incoming, rng, STATS)
     # unrest polarity=-1 (high is bad) → fear pushes value down.
     assert relayed.estimated_value < 100.0
 
@@ -59,6 +62,6 @@ def test_relay_degrades_confidence() -> None:
     upstream = _actor(competence=1.0, honesty=1.0, fear=0.0, education=1.0)
     report = observe(upstream, "R.garrison_strength", 500.0, rng)
     forwarder = _actor(competence=0.5, honesty=0.8, fear=0.0, education=0.5)
-    relayed = relay(forwarder, report, rng)
+    relayed = relay(forwarder, report, rng, STATS)
     assert relayed.confidence < report.confidence
     assert relayed.source_chain == ["a", "a"]

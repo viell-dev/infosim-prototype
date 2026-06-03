@@ -2,22 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .ruleset import StatSpec
 
-@dataclass(frozen=True)
-class StatSpec:
-    """Metadata for a stat tracked on actors.
-
-    polarity:
-      +1 — higher values are "good news" (garrison_strength, food_stores, ships, ore)
-      -1 — higher values are "bad news" (unrest, alien_presence)
-
-    Fear bias uses polarity to push reports in the comforting direction.
-    """
-    name: str
-    polarity: int
-
-
-# Stat schema. Genre-specific replacements (ore, credits, morale, …) plug in here.
+# Union of every stat any bundled scenario uses. The genre schema now lives in
+# each scenario's Ruleset; this union is only scaffolding for tools/map_run.py
+# (the replay tool has no Ruleset to consult). Removed once map_run renders the
+# union of stats actually present on replayed actors.
 STATS: dict[str, StatSpec] = {
     "garrison_strength": StatSpec("garrison_strength", polarity=+1),
     "food_stores":       StatSpec("food_stores",       polarity=+1),
@@ -27,8 +17,6 @@ STATS: dict[str, StatSpec] = {
     "population":        StatSpec("population",        polarity=+1),
     "alien_presence":    StatSpec("alien_presence",    polarity=-1),
 }
-# Backwards-compatible alias used in older references.
-VARIABLES = STATS
 
 
 @dataclass

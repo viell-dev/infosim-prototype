@@ -7,6 +7,7 @@ from infosim.actors import Actor, BeliefRecord, Traits
 from infosim.logging_setup import EventLog
 from infosim.orders import Order, OrderKind
 from infosim.policies.roles import decide_king
+from infosim.scenarios.frontier import RULESET
 from infosim.scheduler import EventKind
 from infosim.sim import Simulation
 from infosim.world import Location, World
@@ -38,6 +39,7 @@ def _sim(tmp_path: Path) -> Simulation:
     log.open()
     return Simulation(
         world=world, actors=actors, rng=rng, event_log=log,
+        ruleset=RULESET,
         bus_loss_prob=0.0, bus_jitter_frac=0.0,
     )
 

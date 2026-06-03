@@ -6,6 +6,7 @@ from pathlib import Path
 from infosim.actions import suppress_unrest, transfer_garrison
 from infosim.actors import Actor, Traits
 from infosim.logging_setup import EventLog
+from infosim.scenarios.frontier import RULESET
 from infosim.sim import Simulation
 from infosim.world import Location, World
 
@@ -30,6 +31,7 @@ def _sim(tmp_path: Path, seed: int = 0) -> Simulation:
     log.open()
     return Simulation(
         world=world, actors={"gov": gov, "cmd": cmd}, rng=rng, event_log=log,
+        ruleset=RULESET,
         bus_loss_prob=0.0, bus_jitter_frac=0.0,
     )
 
