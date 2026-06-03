@@ -15,7 +15,7 @@ from pathlib import Path
 
 from ..actors import Actor, Traits
 from ..logging_setup import EventLog
-from ..personnel import Candidate
+from ..personnel import Candidate, install_occupant, vacate
 from ..ruleset import DecaySpec, ProductionSpec, RoleSpec, Ruleset, StatSpec, TaxSpec
 from ..sim import Simulation
 from ..world import Location, World
@@ -29,6 +29,8 @@ NORTH_PORT = "C1"
 SOUTH_PORT = "C5"
 RACES = ("human", "elf", "orc", "beast-man", "dwarf", "demon")
 POP_STATS = tuple(f"{race.replace('-', '_')}_pops" for race in RACES)
+SOLDIER_STATS = tuple(f"{race.replace('-', '_')}_soldiers" for race in RACES)
+WARRIOR_STATS = tuple(f"{race.replace('-', '_')}_warriors" for race in RACES)
 
 SETTLEMENT_CAPACITY = {
     "village": 420,
@@ -49,8 +51,14 @@ RULESET = Ruleset(
         "herbs": StatSpec("herbs", polarity=+1),
         "ore": StatSpec("ore", polarity=+1),
         "wares": StatSpec("wares", polarity=+1),
+        "luxury_goods": StatSpec("luxury_goods", polarity=+1),
         "weapons": StatSpec("weapons", polarity=+1),
         "warriors": StatSpec("warriors", polarity=+1),
+        "scouts": StatSpec("scouts", polarity=+1),
+        "kingsguard": StatSpec("kingsguard", polarity=+1),
+        "noble_distrust": StatSpec("noble_distrust", polarity=-1),
+        "forest_tension": StatSpec("forest_tension", polarity=-1),
+        "tax_multiplier": StatSpec("tax_multiplier", polarity=-1),
         "food_workers": StatSpec("food_workers", polarity=+1),
         "lumber_workers": StatSpec("lumber_workers", polarity=+1),
         "herb_workers": StatSpec("herb_workers", polarity=+1),
@@ -58,6 +66,8 @@ RULESET = Ruleset(
         "craft_workers": StatSpec("craft_workers", polarity=+1),
         "trade_workers": StatSpec("trade_workers", polarity=+1),
         **{stat: StatSpec(stat, polarity=+1) for stat in POP_STATS},
+        **{stat: StatSpec(stat, polarity=+1) for stat in SOLDIER_STATS},
+        **{stat: StatSpec(stat, polarity=+1) for stat in WARRIOR_STATS},
     },
     defense_stat="soldiers",
     supply_stat="food_stores",
@@ -69,6 +79,8 @@ RULESET = Ruleset(
         "unrest": 55.0,
         "money": 250.0,
         "wares": 80.0,
+        "scouts": 2.0,
+        "forest_tension": 50.0,
     },
     roles={
         "King": RoleSpec(
@@ -77,6 +89,7 @@ RULESET = Ruleset(
             decay=(
                 DecaySpec(stat="food_stores", rate=0.006, driver_stat="population"),
                 DecaySpec(stat="money", rate=0.001),
+                DecaySpec(stat="kingsguard", rate=0.001),
             ),
             thresholds={
                 "low_defense": 240.0,
@@ -93,6 +106,7 @@ RULESET = Ruleset(
             decay=(
                 DecaySpec(stat="food_stores", rate=0.004, driver_stat="population"),
                 DecaySpec(stat="money", rate=0.003),
+                DecaySpec(stat="scouts", rate=0.010),
             ),
             tax=(
                 TaxSpec(stat="food_stores", fraction=0.035, label="food_tax"),
@@ -106,6 +120,7 @@ RULESET = Ruleset(
             decay=(
                 DecaySpec(stat="food_stores", rate=0.004, driver_stat="population"),
                 DecaySpec(stat="money", rate=0.003),
+                DecaySpec(stat="scouts", rate=0.010),
             ),
             tax=(
                 TaxSpec(stat="food_stores", fraction=0.025, label="royal_food_tax"),
@@ -130,10 +145,12 @@ RULESET = Ruleset(
                 ProductionSpec("herbs", "herb_workers", rate=0.06),
                 ProductionSpec("ore", "ore_workers", rate=0.10),
                 ProductionSpec("wares", "craft_workers", rate=0.055),
+                ProductionSpec("luxury_goods", "trade_workers", rate=0.020),
                 ProductionSpec("money", "trade_workers", rate=0.08),
             ),
             decay=(
                 DecaySpec(stat="food_stores", rate=0.026, driver_stat="population"),
+                DecaySpec(stat="herbs", rate=0.002, driver_stat="population"),
                 DecaySpec(stat="wares", rate=0.002, driver_stat="population"),
                 DecaySpec(stat="monster_pressure", rate=0.010),
             ),
@@ -194,6 +211,7 @@ class NobleProfile:
     traits: Traits
     prejudice: tuple[str, ...]
     preference: tuple[str, ...]
+    family_ties: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -396,6 +414,16 @@ def _build_nobles(rng: random.Random, ownership: dict[str, str]) -> dict[str, No
     for index, noble_id in enumerate(non_king_ids):
         holdings = tuple(sorted(coord for coord, owner in ownership.items() if owner == noble_id))
         seat = max(holdings, key=lambda c: _seat_score(c, holdings))
+        family_ties: list[str] = []
+        if rng.random() < 0.12 and len(royal_ids) < 2:
+            family_ties.append("king")
+            royal_ids.add(noble_id)
+        previous = non_king_ids[:index]
+        if previous and rng.random() < 0.30:
+            relative = rng.choice(previous)
+            family_ties.append(relative)
+            if relative in royal_ids and len(royal_ids) < 2:
+                royal_ids.add(noble_id)
         is_royal = noble_id in royal_ids
         race = rng.choice(RACES)
         prejudice = tuple(sorted(rng.sample([r for r in RACES if r != race], k=rng.randint(0, 2))))
@@ -411,6 +439,7 @@ def _build_nobles(rng: random.Random, ownership: dict[str, str]) -> dict[str, No
             traits=_noble_traits(rng, is_royal, len(holdings)),
             prejudice=prejudice,
             preference=preference,
+            family_ties=tuple(family_ties),
         )
     return profiles
 
@@ -481,8 +510,14 @@ def _build_actors(
             "herbs": 500.0,
             "ore": 500.0,
             "wares": 700.0,
+            "luxury_goods": 380.0,
             "weapons": 850.0,
             "warriors": 95.0,
+            "scouts": 18.0,
+            "kingsguard": 220.0,
+            "noble_distrust": 8.0,
+            "forest_tension": 0.0,
+            "tax_multiplier": 1.0,
         },
         report_every=999_999,
         observe_every=10,
@@ -513,8 +548,14 @@ def _build_actors(
                 "herbs": sum(s["herbs"] * 0.12 for s in holding_stats),
                 "ore": sum(s["ore"] * 0.12 for s in holding_stats),
                 "wares": sum(s["wares"] * 0.12 for s in holding_stats),
+                "luxury_goods": sum(s["luxury_goods"] * 0.12 for s in holding_stats),
                 "weapons": 160.0 + sum(s["weapons"] * 0.18 for s in holding_stats),
                 "warriors": 8.0 + 4.0 * len(noble.holdings) + rng.uniform(0, 22),
+                "scouts": sum(s["scouts"] * 0.30 for s in holding_stats) + rng.uniform(0.0, 8.0),
+                "kingsguard": 0.0,
+                "noble_distrust": rng.uniform(4.0, 18.0) - (3.0 if noble.is_royal else 0.0),
+                "forest_tension": max(s["forest_tension"] for s in holding_stats),
+                "tax_multiplier": rng.uniform(0.85, 1.25) - (0.08 if noble.is_royal else 0.0),
             },
             report_every=13,
             observe_every=7,
@@ -558,14 +599,17 @@ def _build_actors(
                     "food_stores": max(120.0, guard_strength * rng.uniform(1.5, 2.8)),
                     "soldiers": guard_strength,
                     "warriors": max(0.0, guard_strength * rng.uniform(0.03, 0.13)),
+                    "scouts": max(0.0, guard_strength * rng.uniform(0.005, 0.030)),
                     "monster_pressure": region.stats["monster_pressure"] * rng.uniform(0.45, 0.90),
                     "unrest": region.stats["unrest"] * rng.uniform(0.20, 0.55),
                     "weapons": guard_strength * rng.uniform(0.75, 1.35),
+                    "tax_multiplier": 0.0,
                 },
                 report_every=7,
                 observe_every=4,
                 decide_every=6,
             ))
+    _ensure_actor_military_splits(rng, actors)
     return actors
 
 
@@ -675,8 +719,23 @@ def _region_stats(
         "herbs": max(0.0, herb_workers * race_bonus["forest"] * rng.uniform(0.8, 1.9)),
         "ore": max(0.0, ore_workers * race_bonus["ore"] * rng.uniform(1.0, 2.4)),
         "wares": max(0.0, craft_workers * race_bonus["craft"] * rng.uniform(0.7, 1.6)),
+        "luxury_goods": max(0.0, (trade_workers + craft_workers) * rng.uniform(0.05, 0.22)),
         "weapons": max(20.0, 40.0 + craft_workers * rng.uniform(0.20, 0.60) + ore_workers * 0.10),
         "warriors": max(0.0, soldiers * rng.uniform(0.015, 0.080)),
+        "scouts": max(
+            0.0,
+            spec_counts["Military"] * rng.uniform(2.0, 6.0)
+            + geography["forest"] * rng.uniform(0.0, 3.0)
+            + geography["border_guard"] * rng.uniform(1.0, 4.0),
+        ),
+        "kingsguard": 0.0,
+        "noble_distrust": 0.0,
+        "forest_tension": max(
+            0.0,
+            geography["forest"] * (lumber_workers + herb_workers) * 0.035
+            - race_pops.get("elf", 0) * 0.010,
+        ),
+        "tax_multiplier": 1.0,
         "food_workers": max(0.0, food_workers),
         "lumber_workers": max(0.0, lumber_workers),
         "herb_workers": max(0.0, herb_workers),
@@ -686,6 +745,7 @@ def _region_stats(
     }
     for race in RACES:
         stats[f"{race.replace('-', '_')}_pops"] = float(race_pops.get(race, 0))
+    _split_military_stats(stats, race_pops, rng)
     return stats, primary
 
 
@@ -763,6 +823,7 @@ def _emit_setup(log: EventLog, setup: KingdomSetup) -> None:
             seat=noble.seat,
             prejudice=list(noble.prejudice),
             preference=list(noble.preference),
+            family_ties=list(noble.family_ties),
         )
     for actor in sorted(setup.actors.values(), key=lambda a: a.id):
         log.emit(
@@ -865,6 +926,1044 @@ def scripted_events(sim: Simulation, setup: KingdomSetup) -> None:
         sim.schedule_scripted(when, lambda s, a=actor_id, st=stat, d=delta, c=cause: _bump(s, a, st, d, c))
 
 
+KINGDOM_STATE_KEY = "isekai_kingdom"
+KINGDOM_TURN_INTERVAL = 16.0
+DEATH_CHANCE_BY_TITLE = {
+    "King": 0.006,
+    "Royal Noble": 0.010,
+    "Noble": 0.011,
+    "Mayor": 0.003,
+    "Guard Captain": 0.002,
+}
+
+
+def schedule_kingdom_systems(sim: Simulation, setup: KingdomSetup) -> None:
+    _init_kingdom_state(sim, setup)
+    sim.schedule_scripted(
+        KINGDOM_TURN_INTERVAL,
+        lambda s: _kingdom_turn(s, setup, KINGDOM_TURN_INTERVAL),
+    )
+
+
+def _init_kingdom_state(sim: Simulation, setup: KingdomSetup) -> None:
+    if KINGDOM_STATE_KEY in sim.scenario_state:
+        return
+    regions: dict[str, dict] = {}
+    for profile in setup.regions.values():
+        owner = sim.actors[profile.owner_id]
+        exempt_identity = None
+        if owner.preference and sim.rng.random() < 0.45:
+            exempt_identity = max(owner.preference, key=owner.preference.get)
+        settlements = [
+            {
+                "name": s.name,
+                "size": s.size,
+                "specialization": s.specialization,
+                "focus": s.focus,
+                "defense_quality": s.defense_quality,
+                "population": float(s.population),
+                "pending_specialization": None,
+            }
+            for s in profile.settlements
+        ]
+        regions[profile.coord] = {
+            "owner_id": profile.owner_id,
+            "settlements": settlements,
+            "race_pops": dict(profile.race_pops),
+            "hidden_monsters": profile.stats["monster_pressure"] * sim.rng.uniform(0.35, 0.90),
+            "recent_attacks": 0.0,
+            "forest_tension": profile.stats["forest_tension"],
+            "tax_exempt_identity": exempt_identity,
+            "last_tax_multiplier": profile.stats.get("tax_multiplier", 1.0),
+            "last_specialization_time": -999.0,
+        }
+        mayor = sim.actors.get(_mayor_id(profile.coord))
+        if mayor is not None:
+            mayor.stats["tax_multiplier"] = profile.stats.get("tax_multiplier", 1.0)
+        sim.event_log.emit(
+            0.0,
+            "tax_policy",
+            f"[{profile.coord}] starting tax multiplier "
+            f"{profile.stats.get('tax_multiplier', 1.0):.2f}"
+            + (f", exemption leaning toward {exempt_identity}" if exempt_identity else ""),
+            location=profile.coord,
+            owner=profile.owner_id,
+            tax_multiplier=profile.stats.get("tax_multiplier", 1.0),
+            exempt_identity=exempt_identity,
+        )
+    for actor in sorted(setup.actors.values(), key=lambda a: a.id):
+        chance = DEATH_CHANCE_BY_TITLE.get(actor.title, 0.0)
+        if chance <= 0.0:
+            continue
+        sim.event_log.emit(
+            0.0,
+            "mortality_setup",
+            f"{actor.title} {actor.display_name} has per-turn death risk {chance:.3f}",
+            actor=actor.id,
+            title=actor.title,
+            death_chance=chance,
+        )
+    for noble in setup.nobles.values():
+        if noble.family_ties:
+            sim.event_log.emit(
+                0.0,
+                "family_tie_setup",
+                f"{noble.display_name} has family ties to {', '.join(noble.family_ties)}",
+                actor=noble.id,
+                family_ties=list(noble.family_ties),
+                is_royal=noble.is_royal,
+            )
+    sim.event_log.emit(
+        0.0,
+        "kingsguard_setup",
+        f"Kingsguard starts at {sim.actors['king'].stats.get('kingsguard', 0.0):.0f}",
+        actor="king",
+        kingsguard=sim.actors["king"].stats.get("kingsguard", 0.0),
+    )
+    sim.scenario_state[KINGDOM_STATE_KEY] = {
+        "regions": regions,
+        "revoked_regions": {},
+        "dead_occupants": [],
+    }
+
+
+def _kingdom_turn(sim: Simulation, setup: KingdomSetup, interval: float) -> None:
+    state = sim.scenario_state[KINGDOM_STATE_KEY]
+    for coord in REGIONS:
+        region_state = state["regions"][coord]
+        mayor = sim.actors.get(_mayor_id(coord))
+        if mayor is None:
+            continue
+        profile = setup.regions[coord]
+        _sync_region_pops(mayor, region_state)
+        _update_tax_policy(sim, setup, coord, region_state, mayor)
+        _maybe_found_or_refocus_settlement(sim, profile, region_state, mayor)
+        _settlement_input_output(sim, profile, region_state, mayor)
+        _migration_step(sim, setup, coord, region_state, mayor)
+        _trade_step(sim, setup, coord, region_state, mayor)
+        _military_training_step(sim, coord, mayor)
+        _monster_step(sim, setup, coord, region_state, mayor)
+        _forest_elf_step(sim, setup, coord, region_state, mayor)
+        region_state["recent_attacks"] = max(0.0, region_state["recent_attacks"] - 0.25)
+    _king_military_step(sim)
+    _revocation_step(sim, setup)
+    _mortality_step(sim, setup)
+    sim.schedule_scripted(
+        sim.now + interval,
+        lambda s: _kingdom_turn(s, setup, interval),
+    )
+
+
+def _sync_region_pops(mayor: Actor, region_state: dict) -> None:
+    total = 0.0
+    for race in RACES:
+        stat = f"{race.replace('-', '_')}_pops"
+        value = max(0.0, mayor.stats.get(stat, float(region_state["race_pops"].get(race, 0))))
+        region_state["race_pops"][race] = int(value)
+        mayor.stats[stat] = value
+        total += value
+    mayor.stats["population"] = total
+
+
+def _region_capacity(region_state: dict) -> float:
+    return sum(SETTLEMENT_CAPACITY[s["size"]] for s in region_state["settlements"])
+
+
+def _neighbor_coords(coord: str) -> list[str]:
+    x, y = _xy(coord)
+    out = []
+    for other in REGIONS:
+        if other == coord:
+            continue
+        ox, oy = _xy(other)
+        if max(abs(x - ox), abs(y - oy)) == 1:
+            out.append(other)
+    return out
+
+
+def _update_tax_policy(
+    sim: Simulation,
+    setup: KingdomSetup,
+    coord: str,
+    region_state: dict,
+    mayor: Actor,
+) -> None:
+    owner = sim.actors.get(region_state["owner_id"])
+    if owner is None:
+        return
+    population = max(1.0, mayor.stats.get("population", 0.0))
+    food_pressure = 1.0 if mayor.stats.get("food_stores", 0.0) < population * 0.30 else 0.0
+    threat_pressure = min(1.0, mayor.stats.get("monster_pressure", 0.0) / 90.0)
+    multiplier = owner.stats.get("tax_multiplier", 1.0)
+    if food_pressure or threat_pressure > 0.5:
+        multiplier -= 0.10 * owner.traits.honesty
+        multiplier += 0.08 * owner.traits.ambition
+    if mayor.identity and mayor.identity in owner.preference:
+        multiplier -= 0.08 * owner.preference[mayor.identity]
+        region_state["tax_exempt_identity"] = mayor.identity
+    if mayor.identity and mayor.identity in owner.prejudice:
+        multiplier += 0.10 * owner.prejudice[mayor.identity]
+    multiplier = max(0.35, min(1.65, multiplier))
+    if abs(multiplier - region_state["last_tax_multiplier"]) >= 0.08:
+        sim.event_log.emit(
+            sim.now,
+            "tax_policy",
+            f"[{coord}] {owner.display_name} sets tax multiplier "
+            f"{region_state['last_tax_multiplier']:.2f} -> {multiplier:.2f}",
+            actor=owner.id,
+            location=coord,
+            previous=region_state["last_tax_multiplier"],
+            tax_multiplier=multiplier,
+            exempt_identity=region_state.get("tax_exempt_identity"),
+        )
+    mayor.stats["tax_multiplier"] = multiplier
+    region_state["last_tax_multiplier"] = multiplier
+
+
+def _maybe_found_or_refocus_settlement(
+    sim: Simulation,
+    profile: RegionProfile,
+    region_state: dict,
+    mayor: Actor,
+) -> None:
+    settlements = region_state["settlements"]
+    if not settlements and mayor.stats.get("money", 0.0) >= 80.0 and sim.rng.random() < 0.28:
+        mayor.stats["money"] -= 80.0
+        settlement = {
+            "name": f"{profile.coord}-{len(settlements) + 1}",
+            "size": "village",
+            "specialization": None,
+            "focus": None,
+            "defense_quality": 0.05,
+            "population": 0.0,
+            "pending_specialization": None,
+        }
+        settlements.append(settlement)
+        sim.event_log.emit(
+            sim.now,
+            "settlement_founded",
+            f"[{profile.coord}] a new empty village is founded",
+            actor=mayor.id,
+            location=profile.coord,
+            settlement=settlement["name"],
+        )
+        return
+
+    if not settlements or sim.now - region_state["last_specialization_time"] < 48.0:
+        return
+    population = max(1.0, mayor.stats.get("population", 0.0))
+    needs_food = mayor.stats.get("food_stores", 0.0) < population * 0.35
+    needs_wares = mayor.stats.get("wares", 0.0) < population * 0.05
+    wants_trade = profile.coord in {NORTH_PORT, SOUTH_PORT} and mayor.stats.get("money", 0.0) < 500.0
+    target_spec: str | None = None
+    target_focus: str | None = None
+    if needs_food:
+        target_spec, target_focus = "Agricultural", "food"
+    elif needs_wares:
+        target_spec, target_focus = "Production", "wares"
+    elif wants_trade:
+        target_spec, target_focus = "Trade", "money"
+    if target_spec is None:
+        return
+    if target_spec == "Agricultural" and sum(1 for s in settlements if s["specialization"] == "Mining") >= 2:
+        return
+    settlement = min(settlements, key=lambda s: s["population"])
+    before = settlement["specialization"]
+    if before is None:
+        settlement["specialization"] = target_spec
+        settlement["focus"] = target_focus
+        settlement["pending_specialization"] = None
+    elif before != target_spec:
+        settlement["specialization"] = None
+        settlement["focus"] = None
+        settlement["pending_specialization"] = (target_spec, target_focus)
+    else:
+        settlement["focus"] = target_focus
+    region_state["last_specialization_time"] = sim.now
+    sim.event_log.emit(
+        sim.now,
+        "settlement_refocus",
+        f"[{profile.coord}] {settlement['name']} shifts {before or 'None'} -> "
+        f"{settlement['specialization'] or 'None'}"
+        + (f" toward {target_spec}" if settlement["pending_specialization"] else ""),
+        actor=mayor.id,
+        location=profile.coord,
+        settlement=settlement["name"],
+        before=before,
+        after=settlement["specialization"],
+        pending=settlement["pending_specialization"],
+    )
+
+
+def _settlement_input_output(
+    sim: Simulation,
+    profile: RegionProfile,
+    region_state: dict,
+    mayor: Actor,
+) -> None:
+    for settlement in region_state["settlements"]:
+        if settlement["pending_specialization"] and settlement["specialization"] is None:
+            target_spec, target_focus = settlement["pending_specialization"]
+            if sim.rng.random() < 0.35:
+                settlement["specialization"] = target_spec
+                settlement["focus"] = target_focus
+                settlement["pending_specialization"] = None
+                sim.event_log.emit(
+                    sim.now,
+                    "settlement_refocus",
+                    f"[{profile.coord}] {settlement['name']} completes refocus to {target_spec}",
+                    actor=mayor.id,
+                    location=profile.coord,
+                    settlement=settlement["name"],
+                    after=target_spec,
+                )
+        spec = settlement["specialization"]
+        focus = settlement["focus"]
+        population = settlement["population"]
+        if spec == "Production" and focus in {"wares", "weapons", "luxury goods"}:
+            lumber = mayor.stats.get("lumber", 0.0)
+            ore = mayor.stats.get("ore", 0.0)
+            inputs = min(lumber, ore, max(1.0, population * 0.018))
+            if inputs <= 0:
+                mayor.stats["unrest"] = mayor.stats.get("unrest", 0.0) + 1.5
+                continue
+            mayor.stats["lumber"] = lumber - inputs
+            mayor.stats["ore"] = ore - inputs
+            output_stat = "luxury_goods" if focus == "luxury goods" else focus
+            produced = inputs * (1.2 + mayor.traits.competence)
+            before = mayor.stats.get(output_stat, 0.0)
+            mayor.stats[output_stat] = before + produced
+            sim.event_log.emit(
+                sim.now,
+                "craft_production",
+                f"[{profile.coord}] {settlement['name']} turns lumber+ore into "
+                f"{produced:.0f} {output_stat}",
+                actor=mayor.id,
+                location=profile.coord,
+                settlement=settlement["name"],
+                stat=output_stat,
+                amount=produced,
+            )
+    population = mayor.stats.get("population", 0.0)
+    for stat, rate in (("herbs", 0.004), ("wares", 0.003)):
+        before = mayor.stats.get(stat, 0.0)
+        consumed = min(before, population * rate)
+        if consumed > 0:
+            mayor.stats[stat] = before - consumed
+            sim.event_log.emit(
+                sim.now,
+                "settlement_consumption",
+                f"[{profile.coord}] settlements consume {consumed:.0f} {stat}",
+                actor=mayor.id,
+                location=profile.coord,
+                stat=stat,
+                amount=consumed,
+            )
+        elif population > 0:
+            mayor.stats["unrest"] = mayor.stats.get("unrest", 0.0) + 1.0
+
+
+def _migration_step(
+    sim: Simulation,
+    setup: KingdomSetup,
+    coord: str,
+    region_state: dict,
+    mayor: Actor,
+) -> None:
+    capacity = _region_capacity(region_state)
+    population = mayor.stats.get("population", 0.0)
+    free_capacity = max(0.0, capacity - population)
+    empty_pull = any(s["population"] <= 0 for s in region_state["settlements"])
+    if empty_pull and free_capacity > 80.0 and sim.rng.random() < 0.40:
+        race = mayor.identity or "human"
+        amount = min(free_capacity, sim.rng.uniform(35.0, 120.0))
+        _add_race_pops(mayor, region_state, race, amount)
+        region_state["settlements"][0]["population"] += amount
+        sim.event_log.emit(
+            sim.now,
+            "migration",
+            f"[{coord}] {amount:.0f} {race} migrants fill empty settlement space",
+            actor=mayor.id,
+            location=coord,
+            race=race,
+            amount=amount,
+            direction="in",
+            reason="empty_settlement_pull",
+        )
+        return
+    push = 0.0
+    if capacity > 0 and population > capacity:
+        push += (population - capacity) / capacity
+    if mayor.stats.get("food_stores", 0.0) < population * 0.25:
+        push += 0.45
+    if mayor.stats.get("monster_pressure", 0.0) > 45.0:
+        push += 0.35
+    if mayor.stats.get("tax_multiplier", 1.0) > 1.20:
+        push += 0.25
+    if push <= 0.45 or population <= 0:
+        return
+    targets = []
+    for neighbor in _neighbor_coords(coord):
+        neighbor_state = sim.scenario_state[KINGDOM_STATE_KEY]["regions"][neighbor]
+        neighbor_mayor = sim.actors.get(_mayor_id(neighbor))
+        if neighbor_mayor is None:
+            continue
+        n_capacity = _region_capacity(neighbor_state)
+        n_free = n_capacity - neighbor_mayor.stats.get("population", 0.0)
+        if n_free <= 0:
+            continue
+        pull = n_free / max(n_capacity, 1.0)
+        pull += setup.regions[neighbor].geography["trade"] * 0.10
+        pull -= neighbor_mayor.stats.get("monster_pressure", 0.0) / 160.0
+        pull -= max(0.0, neighbor_mayor.stats.get("tax_multiplier", 1.0) - 1.0) * 0.20
+        targets.append((pull, neighbor, neighbor_state, neighbor_mayor, n_free))
+    if not targets:
+        mayor.stats["unrest"] = mayor.stats.get("unrest", 0.0) + 2.0
+        return
+    pull, target_coord, target_state, target_mayor, n_free = max(targets, key=lambda item: item[0])
+    if pull <= 0:
+        return
+    race = _migration_race(mayor, region_state)
+    amount = min(population * 0.035 * (1.0 + push), n_free, mayor.stats.get(f"{race.replace('-', '_')}_pops", 0.0))
+    if amount <= 1:
+        return
+    _add_race_pops(mayor, region_state, race, -amount)
+    _add_race_pops(target_mayor, target_state, race, amount)
+    _assign_migrants_to_settlement(target_state, amount)
+    sim.event_log.emit(
+        sim.now,
+        "migration",
+        f"{amount:.0f} {race} migrants leave {coord} for {target_coord}",
+        actor=mayor.id,
+        location=coord,
+        target_location=target_coord,
+        race=race,
+        amount=amount,
+        direction="out",
+        reason="push_pull",
+    )
+
+
+def _migration_race(mayor: Actor, region_state: dict) -> str:
+    candidates = []
+    for race in RACES:
+        pops = region_state["race_pops"].get(race, 0)
+        pressure = pops
+        pressure *= 1.0 + mayor.prejudice.get(race, 0.0)
+        pressure *= 1.0 - min(0.8, mayor.preference.get(race, 0.0))
+        candidates.append((pressure, race))
+    return max(candidates)[1]
+
+
+def _add_race_pops(actor: Actor, region_state: dict, race: str, amount: float) -> None:
+    key = f"{race.replace('-', '_')}_pops"
+    actor.stats[key] = max(0.0, actor.stats.get(key, 0.0) + amount)
+    region_state["race_pops"][race] = int(max(0.0, region_state["race_pops"].get(race, 0) + amount))
+    actor.stats["population"] = max(0.0, actor.stats.get("population", 0.0) + amount)
+
+
+def _assign_migrants_to_settlement(region_state: dict, amount: float) -> None:
+    for settlement in region_state["settlements"]:
+        free = SETTLEMENT_CAPACITY[settlement["size"]] - settlement["population"]
+        if free <= 0:
+            continue
+        take = min(free, amount)
+        settlement["population"] += take
+        amount -= take
+        if amount <= 0:
+            return
+
+
+def _trade_step(
+    sim: Simulation,
+    setup: KingdomSetup,
+    coord: str,
+    region_state: dict,
+    mayor: Actor,
+) -> None:
+    profile = setup.regions[coord]
+    trade_settlements = [s for s in region_state["settlements"] if s["specialization"] == "Trade"]
+    if coord in {NORTH_PORT, SOUTH_PORT} or trade_settlements:
+        external = profile.geography["trade"] * (1.0 + 0.35 * len(trade_settlements))
+        money = external * sim.rng.uniform(18.0, 42.0)
+        luxury = external * sim.rng.uniform(2.0, 8.0)
+        mayor.stats["money"] = mayor.stats.get("money", 0.0) + money
+        mayor.stats["luxury_goods"] = mayor.stats.get("luxury_goods", 0.0) + luxury
+        sim.event_log.emit(
+            sim.now,
+            "trade",
+            f"[{coord}] trade brings {money:.0f} money and {luxury:.0f} luxury goods",
+            actor=mayor.id,
+            location=coord,
+            money=money,
+            luxury_goods=luxury,
+            external=coord in {NORTH_PORT, SOUTH_PORT},
+        )
+    for resource in ("food_stores", "herbs", "wares"):
+        population = max(1.0, mayor.stats.get("population", 0.0))
+        if mayor.stats.get(resource, 0.0) > population * 0.12:
+            continue
+        sellers = []
+        for neighbor in _neighbor_coords(coord):
+            other = sim.actors.get(_mayor_id(neighbor))
+            if other is None:
+                continue
+            surplus = other.stats.get(resource, 0.0) - other.stats.get("population", 0.0) * 0.25
+            if surplus > 30.0:
+                sellers.append((surplus, neighbor, other))
+        if not sellers or mayor.stats.get("money", 0.0) <= 0:
+            continue
+        surplus, seller_coord, seller = max(sellers, key=lambda item: item[0])
+        amount = min(surplus * 0.25, mayor.stats["money"] * 0.8, 160.0)
+        price = amount * 0.7
+        seller.stats[resource] -= amount
+        mayor.stats[resource] = mayor.stats.get(resource, 0.0) + amount
+        mayor.stats["money"] -= price
+        seller.stats["money"] = seller.stats.get("money", 0.0) + price
+        sim.event_log.emit(
+            sim.now,
+            "trade",
+            f"{coord} buys {amount:.0f} {resource} from {seller_coord}",
+            actor=mayor.id,
+            location=coord,
+            seller=seller.id,
+            seller_location=seller_coord,
+            stat=resource,
+            amount=amount,
+            money=price,
+        )
+
+
+def _military_training_step(sim: Simulation, coord: str, mayor: Actor) -> None:
+    threat = mayor.stats.get("monster_pressure", 0.0)
+    if threat < 25.0 and mayor.stats.get("soldiers", 0.0) > 160.0:
+        return
+    weapons = mayor.stats.get("weapons", 0.0)
+    if weapons <= 5.0:
+        return
+    race = max(RACES, key=lambda r: mayor.stats.get(f"{r.replace('-', '_')}_pops", 0.0))
+    pop_key = f"{race.replace('-', '_')}_pops"
+    train = min(weapons * 0.18, mayor.stats.get(pop_key, 0.0) * 0.015, 35.0)
+    if train <= 1.0:
+        return
+    soldier_key = f"{race.replace('-', '_')}_soldiers"
+    mayor.stats["weapons"] -= train
+    mayor.stats[pop_key] -= train
+    mayor.stats["population"] = max(0.0, mayor.stats.get("population", 0.0) - train)
+    mayor.stats["soldiers"] = mayor.stats.get("soldiers", 0.0) + train
+    mayor.stats[soldier_key] = mayor.stats.get(soldier_key, 0.0) + train
+    sim.event_log.emit(
+        sim.now,
+        "soldier_training",
+        f"[{coord}] trains {train:.0f} {race} soldiers",
+        actor=mayor.id,
+        location=coord,
+        race=race,
+        amount=train,
+    )
+    emergence = mayor.stats.get(soldier_key, 0.0) * 0.003 * sim.rng.random()
+    if emergence > 0.5:
+        warrior_key = f"{race.replace('-', '_')}_warriors"
+        mayor.stats["warriors"] = mayor.stats.get("warriors", 0.0) + emergence
+        mayor.stats[warrior_key] = mayor.stats.get(warrior_key, 0.0) + emergence
+        sim.event_log.emit(
+            sim.now,
+            "warrior_emergence",
+            f"[{coord}] {emergence:.1f} {race} soldiers become warriors",
+            actor=mayor.id,
+            location=coord,
+            race=race,
+            amount=emergence,
+        )
+
+
+def _monster_step(
+    sim: Simulation,
+    setup: KingdomSetup,
+    coord: str,
+    region_state: dict,
+    mayor: Actor,
+) -> None:
+    profile = setup.regions[coord]
+    hidden = region_state["hidden_monsters"]
+    hidden += 1.2 + (5.0 if not region_state["settlements"] else 0.0)
+    hidden += profile.geography["forest"] * 0.9 + profile.geography["mining"] * 0.7
+    region_state["hidden_monsters"] = hidden
+    guard = sim.actors.get(_guard_id(coord))
+    scout_power = mayor.stats.get("scouts", 0.0)
+    if guard is not None:
+        scout_power += guard.stats.get("scouts", 0.0) * 0.45 + guard.stats.get("soldiers", 0.0) * 0.003
+    reveal = min(region_state["hidden_monsters"], scout_power * sim.rng.uniform(0.5, 1.4))
+    if reveal > 1.0:
+        region_state["hidden_monsters"] -= reveal
+        before = mayor.stats.get("monster_pressure", 0.0)
+        mayor.stats["monster_pressure"] = before + reveal
+        sim.event_log.emit(
+            sim.now,
+            "monster_detected",
+            f"[{coord}] scouts detect {reveal:.0f} monster pressure",
+            actor=mayor.id,
+            location=coord,
+            amount=reveal,
+            scouts=scout_power,
+            before=before,
+            after=mayor.stats["monster_pressure"],
+        )
+    if region_state["hidden_monsters"] > 35.0 and sim.rng.random() < 0.20:
+        target = sim.rng.choice(_neighbor_coords(coord))
+        moved = region_state["hidden_monsters"] * 0.25
+        region_state["hidden_monsters"] -= moved
+        sim.scenario_state[KINGDOM_STATE_KEY]["regions"][target]["hidden_monsters"] += moved
+        sim.event_log.emit(
+            sim.now,
+            "monster_moved",
+            f"monsters drift from {coord} toward {target}",
+            location=coord,
+            target_location=target,
+            amount=moved,
+        )
+    visible = mayor.stats.get("monster_pressure", 0.0)
+    if visible > 65.0 or region_state["hidden_monsters"] > 80.0:
+        attack = min(visible + region_state["hidden_monsters"] * 0.4, sim.rng.uniform(30.0, 90.0))
+        region_state["hidden_monsters"] = max(0.0, region_state["hidden_monsters"] - attack * 0.45)
+        mayor.stats["monster_pressure"] = max(0.0, visible - attack * 0.55)
+        pop_loss = min(mayor.stats.get("population", 0.0) * 0.04, attack * 1.6)
+        food_loss = min(mayor.stats.get("food_stores", 0.0), attack * 4.0)
+        soldier_loss = min(mayor.stats.get("soldiers", 0.0), attack * 0.55)
+        mayor.stats["population"] = max(0.0, mayor.stats.get("population", 0.0) - pop_loss)
+        mayor.stats["food_stores"] = max(0.0, mayor.stats.get("food_stores", 0.0) - food_loss)
+        mayor.stats["soldiers"] = max(0.0, mayor.stats.get("soldiers", 0.0) - soldier_loss)
+        mayor.stats["unrest"] = mayor.stats.get("unrest", 0.0) + attack * 0.25
+        region_state["recent_attacks"] += 1.0
+        sim.event_log.emit(
+            sim.now,
+            "monster_attack",
+            f"[{coord}] monsters attack: pop -{pop_loss:.0f}, food -{food_loss:.0f}, "
+            f"soldiers -{soldier_loss:.0f}",
+            actor=mayor.id,
+            location=coord,
+            amount=attack,
+            population_loss=pop_loss,
+            food_loss=food_loss,
+            soldier_loss=soldier_loss,
+        )
+
+
+def _forest_elf_step(
+    sim: Simulation,
+    setup: KingdomSetup,
+    coord: str,
+    region_state: dict,
+    mayor: Actor,
+) -> None:
+    if _col(coord) != "A":
+        return
+    owner = sim.actors.get(region_state["owner_id"])
+    elf_factor = mayor.stats.get("elf_pops", 0.0) / max(1.0, mayor.stats.get("population", 0.0))
+    exploitation = (mayor.stats.get("lumber_workers", 0.0) + mayor.stats.get("herb_workers", 0.0)) * 0.015
+    tension = region_state["forest_tension"] + exploitation - 1.8 * elf_factor
+    if owner is not None:
+        tension += owner.prejudice.get("elf", 0.0) * 10.0
+        tension += owner.traits.ambition * 1.1
+    tension = max(0.0, tension)
+    region_state["forest_tension"] = tension
+    mayor.stats["forest_tension"] = tension
+    if tension < 55.0 or sim.rng.random() > 0.35:
+        return
+    lumber_loss = min(mayor.stats.get("lumber", 0.0), tension * 1.8)
+    herb_loss = min(mayor.stats.get("herbs", 0.0), tension * 0.9)
+    mayor.stats["lumber"] -= lumber_loss
+    mayor.stats["herbs"] -= herb_loss
+    mayor.stats["unrest"] = mayor.stats.get("unrest", 0.0) + 8.0
+    region_state["forest_tension"] *= 0.55
+    sim.event_log.emit(
+        sim.now,
+        "forest_elf_incident",
+        f"[{coord}] forest elves disrupt extraction: lumber -{lumber_loss:.0f}, "
+        f"herbs -{herb_loss:.0f}",
+        actor=mayor.id,
+        location=coord,
+        lumber_loss=lumber_loss,
+        herb_loss=herb_loss,
+        forest_tension=tension,
+        owner=owner.id if owner is not None else None,
+    )
+
+
+def _king_military_step(sim: Simulation) -> None:
+    king = sim.actors.get("king")
+    if king is None:
+        return
+    if king.stats.get("weapons", 0.0) > 20.0 and king.stats.get("soldiers", 0.0) > 50.0:
+        train = min(king.stats["weapons"] * 0.04, king.stats["soldiers"] * 0.015, 12.0)
+        if train > 0:
+            king.stats["weapons"] -= train
+            king.stats["soldiers"] -= train
+            king.stats["kingsguard"] = king.stats.get("kingsguard", 0.0) + train
+            sim.event_log.emit(
+                sim.now,
+                "kingsguard_training",
+                f"[{king.location}] {train:.0f} soldiers join the Kingsguard",
+                actor=king.id,
+                amount=train,
+            )
+    for actor in sim.actors.values():
+        if actor.title != "Royal Noble":
+            continue
+        if actor.stats.get("monster_pressure", 0.0) > 45.0 and king.stats.get("kingsguard", 0.0) > 0:
+            aid = min(king.stats["kingsguard"] * 0.06, 18.0)
+            king.stats["kingsguard"] -= aid
+            actor.stats["soldiers"] = actor.stats.get("soldiers", 0.0) + aid
+            actor.stats["noble_distrust"] = max(0.0, actor.stats.get("noble_distrust", 0.0) - 2.0)
+            sim.event_log.emit(
+                sim.now,
+                "kingsguard_aid",
+                f"Kingsguard lends {aid:.0f} soldiers to Royal Noble {actor.display_name}",
+                actor=king.id,
+                recipient=actor.id,
+                amount=aid,
+            )
+
+
+def _revocation_step(sim: Simulation, setup: KingdomSetup) -> None:
+    state = sim.scenario_state[KINGDOM_STATE_KEY]
+    revoked_regions: dict[str, dict] = state["revoked_regions"]
+    _reassign_revoked_regions(sim, setup, revoked_regions)
+    if sim.now < 80.0:
+        return
+    candidates = []
+    king = sim.actors["king"]
+    for actor in sim.actors.values():
+        if actor.id == "king" or actor.title not in {"Noble", "Royal Noble"} or actor.vacant:
+            continue
+        held = [
+            coord for coord, region_state in state["regions"].items()
+            if region_state["owner_id"] == actor.id
+        ]
+        if len(held) <= 1:
+            continue
+        worst_coord = max(
+            held,
+            key=lambda c: (
+                sim.actors[_mayor_id(c)].stats.get("monster_pressure", 0.0)
+                + sim.actors[_mayor_id(c)].stats.get("unrest", 0.0)
+                - sim.actors[_mayor_id(c)].stats.get("food_stores", 0.0) / 250.0
+                + state["regions"][c].get("recent_attacks", 0.0) * 18.0
+            ),
+        )
+        mayor = sim.actors[_mayor_id(worst_coord)]
+        stress = (
+            mayor.stats.get("monster_pressure", 0.0)
+            + mayor.stats.get("unrest", 0.0)
+            + state["regions"][worst_coord].get("recent_attacks", 0.0) * 22.0
+        )
+        shortage = mayor.stats.get("food_stores", 0.0) < mayor.stats.get("population", 0.0) * 0.22
+        political = actor.traits.ambition * 18.0 + (1.0 - actor.traits.loyalty) * 20.0
+        review_pressure = king.strikes.get(actor.id, 0) * 18.0
+        score = stress + political + review_pressure + (16.0 if shortage else 0.0)
+        if actor.title == "Royal Noble":
+            score -= 14.0
+        candidates.append((score, actor, worst_coord))
+    if not candidates:
+        return
+    score, noble, coord = max(candidates, key=lambda item: item[0])
+    chance = min(0.45, max(0.0, (score - 76.0) / 180.0))
+    if chance <= 0.0 or sim.rng.random() >= chance:
+        return
+    region_state = state["regions"][coord]
+    mayor = sim.actors[_mayor_id(coord)]
+    region_state["owner_id"] = "king"
+    mayor.commander = "king"
+    mayor.regent = None
+    revoked_regions[coord] = {
+        "former_owner": noble.id,
+        "revoked_at": sim.now,
+        "reassign_after": sim.now + sim.rng.uniform(32.0, 72.0),
+        "kept_warning_at": None,
+    }
+    distrust_gain = 6.0 + noble.traits.ambition * 8.0
+    _raise_noble_distrust(sim, distrust_gain, exempt_id=noble.id)
+    king.stats["noble_distrust"] = king.stats.get("noble_distrust", 0.0) + distrust_gain * 0.35
+    sim.event_log.emit(
+        sim.now,
+        "title_revoked",
+        f"[{coord}] King revokes {noble.display_name}'s title over the region",
+        actor="king",
+        noble=noble.id,
+        location=coord,
+        stress_score=score,
+        distrust_gain=distrust_gain,
+    )
+
+
+def _reassign_revoked_regions(
+    sim: Simulation,
+    setup: KingdomSetup,
+    revoked_regions: dict[str, dict],
+) -> None:
+    for coord, revoked in list(revoked_regions.items()):
+        if sim.now < revoked["reassign_after"]:
+            continue
+        king = sim.actors["king"]
+        keep_bias = king.traits.ambition - king.traits.honesty * 0.35
+        if keep_bias > 0.18 and sim.rng.random() < min(0.65, keep_bias):
+            if revoked["kept_warning_at"] is None or sim.now - revoked["kept_warning_at"] >= 48.0:
+                revoked["kept_warning_at"] = sim.now
+                revoked["reassign_after"] = sim.now + 48.0
+                _raise_noble_distrust(sim, 5.0)
+                king.stats["noble_distrust"] = king.stats.get("noble_distrust", 0.0) + 5.0
+                sim.event_log.emit(
+                    sim.now,
+                    "revoked_region_kept",
+                    f"[{coord}] King keeps revoked land in crown hands, alarming Nobles",
+                    actor="king",
+                    location=coord,
+                    former_owner=revoked["former_owner"],
+                    noble_distrust=king.stats["noble_distrust"],
+                )
+                continue
+        recipient = _choose_region_recipient(sim, setup, coord, revoked["former_owner"])
+        if recipient is None:
+            revoked["reassign_after"] = sim.now + 48.0
+            continue
+        region_state = sim.scenario_state[KINGDOM_STATE_KEY]["regions"][coord]
+        mayor = sim.actors[_mayor_id(coord)]
+        region_state["owner_id"] = recipient.id
+        mayor.commander = recipient.id
+        recipient.stats["noble_distrust"] = max(0.0, recipient.stats.get("noble_distrust", 0.0) - 3.0)
+        sim.event_log.emit(
+            sim.now,
+            "region_reassigned",
+            f"[{coord}] King reassigns revoked region to {recipient.display_name}",
+            actor="king",
+            recipient=recipient.id,
+            location=coord,
+            former_owner=revoked["former_owner"],
+        )
+        del revoked_regions[coord]
+
+
+def _choose_region_recipient(
+    sim: Simulation,
+    setup: KingdomSetup,
+    coord: str,
+    former_owner: str,
+) -> Actor | None:
+    candidates = []
+    king = sim.actors["king"]
+    for actor in sim.actors.values():
+        if actor.id in {"king", former_owner} or actor.title not in {"Noble", "Royal Noble"}:
+            continue
+        if actor.vacant:
+            continue
+        holdings = sum(
+            1 for region_state in sim.scenario_state[KINGDOM_STATE_KEY]["regions"].values()
+            if region_state["owner_id"] == actor.id
+        )
+        adjacency = any(
+            _connected(coord, other)
+            for other, region_state in sim.scenario_state[KINGDOM_STATE_KEY]["regions"].items()
+            if region_state["owner_id"] == actor.id
+        )
+        score = (
+            actor.traits.loyalty * 1.8
+            + actor.traits.competence * 1.4
+            + actor.traits.honesty
+            - holdings * 0.35
+            - actor.stats.get("noble_distrust", 0.0) / 80.0
+            + (0.45 if actor.title == "Royal Noble" else 0.0)
+            + (0.65 if adjacency else 0.0)
+            + king.affinity_for(actor.identity) * 0.55
+        )
+        candidates.append((score, actor))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item[0])[1]
+
+
+def _raise_noble_distrust(sim: Simulation, amount: float, exempt_id: str | None = None) -> None:
+    for actor in sim.actors.values():
+        if actor.id == exempt_id or actor.title not in {"Noble", "Royal Noble"}:
+            continue
+        actor.stats["noble_distrust"] = actor.stats.get("noble_distrust", 0.0) + amount
+
+
+def _mortality_step(sim: Simulation, setup: KingdomSetup) -> None:
+    for actor in sorted(sim.actors.values(), key=lambda a: a.id):
+        if actor.vacant:
+            continue
+        chance = DEATH_CHANCE_BY_TITLE.get(actor.title, 0.0)
+        if chance <= 0.0:
+            continue
+        tenure = sim.now - actor.tenure_start_time
+        if tenure < KINGDOM_TURN_INTERVAL * 2:
+            continue
+        danger = 1.0
+        if actor.title in {"Mayor", "Guard Captain"}:
+            danger += actor.stats.get("monster_pressure", 0.0) / 220.0
+            danger += actor.stats.get("unrest", 0.0) / 350.0
+        elif actor.title in {"Noble", "Royal Noble"}:
+            danger += actor.stats.get("noble_distrust", 0.0) / 300.0
+        if sim.rng.random() >= chance * danger:
+            continue
+        _handle_actor_death(sim, setup, actor)
+
+
+def _handle_actor_death(sim: Simulation, setup: KingdomSetup, actor: Actor) -> None:
+    sim.scenario_state[KINGDOM_STATE_KEY]["dead_occupants"].append({
+        "actor": actor.id,
+        "display_name": actor.display_name,
+        "title": actor.title,
+        "time": sim.now,
+    })
+    sim.event_log.emit(
+        sim.now,
+        "actor_death",
+        f"[{actor.location}] {actor.title} {actor.display_name} dies unexpectedly",
+        actor=actor.id,
+        title=actor.title,
+        display_name=actor.display_name,
+        location=actor.location,
+    )
+    if actor.id == "king":
+        _handle_king_succession(sim, setup, actor)
+        return
+    superior = sim.actors.get(actor.commander) or sim.actors["king"]
+    candidate = _generated_successor_candidate(sim, actor)
+    install_occupant(sim, actor, superior, candidate, reason="random death")
+    sim.event_log.emit(
+        sim.now,
+        "office_succession",
+        f"[{actor.location}] {candidate.display_name} succeeds to {actor.title}",
+        actor=actor.id,
+        title=actor.title,
+        successor_name=candidate.display_name,
+        successor_identity=candidate.identity,
+    )
+
+
+def _handle_king_succession(sim: Simulation, setup: KingdomSetup, king: Actor) -> None:
+    successor = _choose_royal_successor(sim, setup)
+    if successor is None:
+        candidate = _generated_successor_candidate(sim, king)
+        score = 0.0
+        source_title = "emergency council"
+        source_actor = None
+    else:
+        candidate = _candidate_from_actor(successor, f"succession_{successor.id}_{int(sim.now)}")
+        score = _succession_score(sim, setup, successor)
+        source_title = successor.title
+        source_actor = successor.id
+    install_occupant(sim, king, king, candidate, reason="king died")
+    sim.event_log.emit(
+        sim.now,
+        "succession",
+        f"{candidate.display_name} succeeds to the crown from {source_title}",
+        actor="king",
+        successor=source_actor,
+        successor_name=candidate.display_name,
+        successor_identity=candidate.identity,
+        source_title=source_title,
+        strength_score=score,
+    )
+    if successor is not None and successor.id != "king" and not successor.vacant:
+        vacate(sim, successor, king, reason=f"{candidate.display_name} succeeded to the crown")
+
+
+def _choose_royal_successor(sim: Simulation, setup: KingdomSetup) -> Actor | None:
+    nobles = [
+        actor for actor in sim.actors.values()
+        if actor.title in {"Royal Noble", "Noble"} and not actor.vacant
+    ]
+    if not nobles:
+        return None
+    royals = [actor for actor in nobles if actor.title == "Royal Noble"]
+    pool = royals if royals else nobles
+    return max(pool, key=lambda actor: _succession_score(sim, setup, actor))
+
+
+def _succession_score(sim: Simulation, setup: KingdomSetup, actor: Actor) -> float:
+    state = sim.scenario_state[KINGDOM_STATE_KEY]
+    holdings = [
+        coord for coord, region_state in state["regions"].items()
+        if region_state["owner_id"] == actor.id
+    ]
+    profile = setup.nobles.get(actor.id)
+    family_pull = 0.0
+    if profile is not None:
+        family_pull += 18.0 if "king" in profile.family_ties else 0.0
+        family_pull += 5.0 * len(profile.family_ties)
+    army = actor.stats.get("soldiers", 0.0) + actor.stats.get("warriors", 0.0) * 4.0
+    stockpiles = (
+        actor.stats.get("food_stores", 0.0) / 120.0
+        + actor.stats.get("money", 0.0) / 160.0
+        + actor.stats.get("weapons", 0.0) / 80.0
+    )
+    support = (
+        actor.traits.loyalty * 12.0
+        + actor.traits.competence * 10.0
+        + actor.traits.honesty * 8.0
+        - actor.stats.get("noble_distrust", 0.0) * 0.45
+    )
+    return (
+        (25.0 if actor.title == "Royal Noble" else 0.0)
+        + len(holdings) * 16.0
+        + army / 32.0
+        + stockpiles
+        + family_pull
+        + support
+    )
+
+
+def _candidate_from_actor(actor: Actor, candidate_id: str) -> Candidate:
+    return Candidate(
+        id=candidate_id,
+        display_name=actor.display_name,
+        traits=actor.traits,
+        identity=actor.identity,
+        prejudice=dict(actor.prejudice),
+        preference=dict(actor.preference),
+    )
+
+
+def _generated_successor_candidate(sim: Simulation, office: Actor) -> Candidate:
+    identity = office.identity or sim.rng.choice(RACES)
+    prejudice = dict(office.prejudice)
+    preference = dict(office.preference)
+    if sim.rng.random() < 0.35:
+        prejudice = _affinity_map(
+            sim.rng.sample([race for race in RACES if race != identity], k=sim.rng.randint(0, 1))
+        )
+    if sim.rng.random() < 0.35:
+        preference = _affinity_map(
+            sim.rng.sample([race for race in RACES if race not in prejudice], k=sim.rng.randint(0, 1))
+        )
+    base = office.traits
+    traits = Traits(
+        competence=max(0.25, min(0.95, base.competence + sim.rng.uniform(-0.16, 0.16))),
+        honesty=max(0.25, min(0.98, base.honesty + sim.rng.uniform(-0.16, 0.16))),
+        loyalty=max(0.20, min(0.98, base.loyalty + sim.rng.uniform(-0.18, 0.18))),
+        ambition=max(0.05, min(0.95, base.ambition + sim.rng.uniform(-0.18, 0.18))),
+        fear=max(0.05, min(0.90, base.fear + sim.rng.uniform(-0.14, 0.14))),
+        education=max(0.20, min(0.95, base.education + sim.rng.uniform(-0.16, 0.16))),
+    )
+    title_word = {
+        "King": "Heir",
+        "Royal Noble": "Heir",
+        "Noble": "Heir",
+        "Mayor": "Deputy",
+        "Guard Captain": "Lieutenant",
+    }.get(office.title, "Successor")
+    return Candidate(
+        id=f"generated_{office.id}_{int(sim.now)}",
+        display_name=f"{title_word} {_surname(sim.rng)}",
+        traits=traits,
+        identity=identity,
+        prejudice=prejudice,
+        preference=preference,
+    )
+
+
 def run(seed: int, ticks: int, runs_dir: Path) -> Path:
     rng = random.Random(seed)
     setup = generate(seed)
@@ -885,6 +1984,7 @@ def run(seed: int, ticks: int, runs_dir: Path) -> Path:
         bus_jitter_frac=0.25,
     )
     _emit_setup(log, setup)
+    schedule_kingdom_systems(sim, setup)
     scripted_events(sim, setup)
     try:
         sim.run_until(float(ticks))
@@ -988,6 +2088,60 @@ def _local_affinity_maps(
         target = rng.choice(likely or [race for race in RACES if race not in prejudice])
         preference[target] = rng.uniform(0.10, 0.28)
     return prejudice, preference
+
+
+def _split_military_stats(stats: dict[str, float], race_pops: dict[str, int], rng: random.Random) -> None:
+    total_pops = sum(race_pops.values())
+    if total_pops <= 0:
+        for race in RACES:
+            key = race.replace("-", "_")
+            stats[f"{key}_soldiers"] = 0.0
+            stats[f"{key}_warriors"] = 0.0
+        return
+    military_bias = {
+        "human": 1.0,
+        "elf": 0.72,
+        "orc": 1.35,
+        "beast-man": 1.12,
+        "dwarf": 1.18,
+        "demon": 1.08,
+    }
+    weighted = {
+        race: race_pops.get(race, 0) * military_bias[race] * rng.uniform(0.85, 1.15)
+        for race in RACES
+    }
+    denom = sum(weighted.values()) or 1.0
+    warrior_weighted = {
+        race: weighted[race] * (1.2 if race in {"orc", "dwarf", "demon"} else 1.0)
+        for race in RACES
+    }
+    warrior_denom = sum(warrior_weighted.values()) or 1.0
+    soldiers = stats.get("soldiers", 0.0)
+    warriors = stats.get("warriors", 0.0)
+    for race in RACES:
+        key = race.replace("-", "_")
+        share = weighted[race] / denom
+        stats[f"{key}_soldiers"] = soldiers * share
+        stats[f"{key}_warriors"] = warriors * warrior_weighted[race] / warrior_denom
+
+
+def _ensure_actor_military_splits(rng: random.Random, actors: dict[str, Actor]) -> None:
+    for actor in actors.values():
+        if any(stat in actor.stats for stat in SOLDIER_STATS):
+            continue
+        soldiers = actor.stats.get("soldiers", 0.0)
+        warriors = actor.stats.get("warriors", 0.0)
+        if soldiers <= 0 and warriors <= 0:
+            continue
+        weights = {race: rng.uniform(0.6, 1.2) for race in RACES}
+        if actor.identity in weights:
+            weights[actor.identity] *= 2.2
+        denom = sum(weights.values()) or 1.0
+        for race in RACES:
+            key = race.replace("-", "_")
+            share = weights[race] / denom
+            actor.stats[f"{key}_soldiers"] = soldiers * share
+            actor.stats[f"{key}_warriors"] = warriors * share
 
 
 def _noble_traits(rng: random.Random, royal: bool, holdings: int) -> Traits:

@@ -104,7 +104,11 @@ def behavior_tax(sim: "Simulation", office: "Actor", principal: "Actor", role: "
         return
     for spec in role.tax:
         available = actor.stats.get(spec.stat, 0.0)
-        amount = available * spec.fraction
+        multiplier = actor.stats.get(
+            f"{spec.stat}_tax_multiplier",
+            actor.stats.get("tax_multiplier", 1.0),
+        )
+        amount = available * spec.fraction * max(0.0, multiplier)
         if amount <= 0:
             continue
         transfer_stat(

@@ -266,6 +266,30 @@ they can be answered.
 
 Append-only. Add notes as the design evolves.
 
+### 2026-06-03 — Isekai kingdom recurring systems expanded (GPT-5 via Codex)
+
+Expanded the kingdom from setup-plus-generic-policy into a recurring scenario
+simulation. `Simulation` now carries scenario-owned runtime state so concrete
+worlds can track mutable local systems without teaching the engine fantasy
+concepts. The kingdom uses that state for settlement refocus/founding,
+population migration, external and neighbor trade, production inputs,
+race-split soldier training and warrior emergence, scouts and hidden monster
+buildup, forest-elf tension, Kingsguard training/aid, and regional tax
+multiplier changes.
+
+Added governance churn from the scenario doc: family ties are generated and
+logged, every occupied office has a small per-turn death risk, seed `3` kills
+the King at `t=352` in a 500-tick run, and succession passes through the
+strongest Royal/Noble score. Revoked regions now return to the King directly,
+then either stay in crown hands long enough to raise Noble distrust or get
+reassigned to another Noble after deliberation.
+
+Validation: `just check` passes 48 tests. Additional seed samples confirmed
+seed `1` emits revocation and reassignment by 260 ticks, seed `3` emits
+`actor_death` for `king` followed by `succession`, and 240-500 tick runs emit
+trade, migration, training, monster attacks, forest-elf incidents, and office
+succession.
+
 ### 2026-06-03 — Isekai kingdom grid scenario implemented (GPT-5 via Codex)
 
 Implemented `infosim.scenarios.isekai_kingdom` from

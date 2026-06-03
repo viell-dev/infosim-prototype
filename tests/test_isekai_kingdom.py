@@ -75,13 +75,20 @@ def test_kingdom_run_emits_setup_economy_politics_and_shocks(tmp_path) -> None:
     assert {
         "scenario_setup",
         "actor_identity_setup",
+        "mortality_setup",
         "noble_setup",
         "region_setup",
+        "tax_policy",
+        "kingsguard_setup",
         "observation",
         "dispatch",
         "receive",
         "mining",
         "consumption",
+        "trade",
+        "migration",
+        "soldier_training",
+        "monster_detected",
         "action_started",
         "action_completed",
         "true_state_change",
@@ -102,6 +109,49 @@ def test_kingdom_run_emits_setup_economy_politics_and_shocks(tmp_path) -> None:
         ev["kind"] == "review_strike" and ev.get("subordinate") in crown_mayors
         for ev in events
     )
+
+
+def test_kingdom_recurring_systems_include_revocation_and_reassignment(tmp_path) -> None:
+    base = run(seed=1, ticks=260, runs_dir=tmp_path)
+    events = _read_events(base.with_suffix(".jsonl"))
+    kinds = {str(ev["kind"]) for ev in events}
+    revocations = [ev for ev in events if ev["kind"] == "title_revoked"]
+    reassignments = [ev for ev in events if ev["kind"] == "region_reassigned"]
+
+    assert {
+        "settlement_founded",
+        "settlement_refocus",
+        "monster_attack",
+        "forest_elf_incident",
+        "warrior_emergence",
+        "actor_death",
+        "office_succession",
+        "title_revoked",
+        "region_reassigned",
+    } <= kinds
+    assert revocations
+    assert reassignments
+    assert any(
+        reassignment["location"] == revocation["location"]
+        and reassignment["time"] > revocation["time"]
+        for revocation in revocations
+        for reassignment in reassignments
+    )
+
+
+def test_kingdom_seed_three_can_kill_the_king_and_trigger_succession(tmp_path) -> None:
+    base = run(seed=3, ticks=500, runs_dir=tmp_path)
+    events = _read_events(base.with_suffix(".jsonl"))
+    king_deaths = [
+        ev for ev in events
+        if ev["kind"] == "actor_death" and ev.get("actor") == "king"
+    ]
+    successions = [ev for ev in events if ev["kind"] == "succession"]
+
+    assert king_deaths
+    assert successions
+    assert successions[0]["time"] >= king_deaths[0]["time"]
+    assert successions[0]["source_title"] in {"Royal Noble", "Noble", "emergency council"}
 
 
 def test_kingdom_map_replay_uses_seeded_initial_state(tmp_path) -> None:

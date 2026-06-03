@@ -3,7 +3,7 @@ from __future__ import annotations
 import itertools
 import random
 from dataclasses import dataclass, field
-from typing import Callable, Iterator
+from typing import Any, Callable, Iterator
 
 from .actors import Actor
 from .logging_setup import EventLog
@@ -44,6 +44,7 @@ class Simulation:
     bus: MessageBus = field(init=False)
     candidate_pool: list[Candidate] = field(default_factory=list)
     used_candidates: set[str] = field(default_factory=set)
+    scenario_state: dict[str, Any] = field(default_factory=dict)
     _order_ids: Iterator[int] = field(default_factory=lambda: itertools.count(1))
     _request_ids: Iterator[int] = field(default_factory=lambda: itertools.count(1))
     _bootstrapped: bool = field(default=False, init=False)
