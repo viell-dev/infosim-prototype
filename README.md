@@ -263,6 +263,45 @@ they can be answered.
 
 Append-only. Add notes as the design evolves.
 
+### 2026-06-03 — Position-centric offices + remote regency for vacant seats (Claude Opus 4.8 via Claude Code)
+
+Reworked the hierarchy so you "work for the position, not the person," and made
+a vacant seat governed remotely by its superior. Two commits.
+
+**Offices are stable nodes (commit 13dc460).** An `Actor` is now an office plus
+its current occupant. A dismissal swaps the occupant *in place* under the same
+stable office id (`personnel.install_occupant`) instead of minting a node keyed
+by the candidate. Across an occupant change the office keeps its id, location,
+title, parent, **resources**, subordinate links, and the superior's **resource
+beliefs** about it; what resets is person/trust state — the occupant's own
+beliefs/queues/tenure and the superior's **strikes** against the seat (so a
+successor isn't instantly fired for the predecessor's corruption, per the user's
+note). Subordinates are **never rewired** on an occupant change — only a genuine
+move (`actions.move_actor`, the space_miner mobile Commander) changes a node's
+parent. This also deletes the old orphan-on-vacancy bug: a 60-seed × 2-scenario
+run with emptied candidate pools produced 0 crashes (previously a scripted order
+to a dismissed manager `KeyError`-ed the run).
+
+**Remote regency (commit 0a28b81).** When no candidate is available, the seat
+stays as a node with no occupant, minded by an honest, incorruptible caretaker
+(so it observes/reports truthfully), and its superior — the *regent* — executes
+the seat's own title-role on its resources/subordinates. `run_policy` resolves an
+acting `principal` (the occupant, or the regent for a vacant seat) and threads it
+through the behaviors: the office supplies resources/subordinates/location, the
+principal supplies decision traits and is the issuer of command couriers — so
+they leave from the regent's seat over the real, longer distance ("can't be in
+two places at once"). `test_vacancy` confirms a forwarded order's courier eta
+reflects the regent→subordinate distance (Capital→Frontier 10), not the absent
+governor's (6), and that the caretaker reports the seat honestly. The apex is
+never vacant, so apex behaviors (issue_orders/review) are untouched.
+
+This shifts the dismissal dynamics (beliefs persist across occupants, trust
+resets, fewer cascade-fires), so per-seed run numbers differ from before — fine
+under the "close enough" stance. Tests: 41/41. New `test_office_identity`
+(persist-vs-reset semantics) and `test_vacancy` (remote governance); the map
+replay (`tools/map_run.py`) now shows occupant changes as one persistent node and
+renders a vacant seat as "Vacant — governed by <regent>" with its subtree intact.
+
 ### 2026-06-03 — Random-default seeds; seed-robust space_miner tests (Claude Opus 4.8 via Claude Code)
 
 Followup to the run-diff review. Two changes so we stop implicitly validating a
