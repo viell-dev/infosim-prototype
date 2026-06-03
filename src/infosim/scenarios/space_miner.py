@@ -278,9 +278,13 @@ def _alien(sim: Simulation, location: str, amount: float, cause: str) -> None:
 
 
 def _mission_orders(sim: Simulation) -> None:
-    ceo = sim.actors["ceo"]
-    cmd = sim.actors["cmd_orion"]
-    mgr_ceres = sim.actors["mgr_ceres"]
+    ceo = sim.actors.get("ceo")
+    cmd = sim.actors.get("cmd_orion")
+    # Whoever currently holds Ceres Station — the original manager may have been
+    # dismissed and replaced before this scripted order fires.
+    mgr_ceres = _station_holder(sim, "Ceres Station")
+    if ceo is None or cmd is None or mgr_ceres is None:
+        return
     _dispatch_order(
         sim, ceo, cmd, OrderKind.MOVE_TO_LOCATION, cmd.id,
         magnitude=0, priority=3, target_location="Ceres Station",
