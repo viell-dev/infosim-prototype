@@ -5,8 +5,6 @@ from typing import TYPE_CHECKING
 
 from ..personnel import appoint, dismiss, pick_replacement
 from .constants import (
-    KING_REVIEW_GARRISON,
-    KING_REVIEW_UNREST,
     KING_STRIKES_TO_DISMISS,
     PEER_DEV_HIGH,
     PEER_DEV_LOW,
@@ -17,6 +15,15 @@ from .info_requests import maybe_initiate_audit
 if TYPE_CHECKING:
     from ..actors import Actor
     from ..sim import Simulation
+
+
+def _combine(func, a: float | None, b: float | None) -> float | None:
+    """max/min of two optional thresholds; whichever is set if only one is."""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return func(a, b)
 
 
 def _chain_actors(sim: "Simulation", sub: "Actor") -> list[str]:
@@ -86,17 +93,25 @@ def _review_subordinate(sim: "Simulation", king: "Actor", sub: "Actor") -> None:
             else:
                 bad_now = False
     else:
-        # Single-sub fallback — absolute thresholds.
+        # Single-sub fallback — absolute thresholds from the King's role. The
+        # review cutoffs combine with the order-trigger thresholds: review fires
+        # only on threat worse than both, or defense worse than both.
+        role = sim.ruleset.roles.get(king.title)
+        thresholds = role.thresholds if role is not None else {}
+        review_threat = _combine(max, thresholds.get("review_threat"), thresholds.get("high_threat"))
+        review_defense = _combine(min, thresholds.get("review_defense"), thresholds.get("low_defense"))
         bad_now = False
         for actor_id in _chain_actors(sim, sub):
-            unrest = king.known.get(sim.subject_for(actor_id, sim.threat_stat))
-            if unrest and unrest.value > max(KING_REVIEW_UNREST, sim.apex_high_threat):
-                bad_now = True
-                reason = f"high believed {sim.threat_stat} at {actor_id}"
-            garrison = king.known.get(sim.subject_for(actor_id, sim.defense_stat))
-            if garrison and garrison.value < min(KING_REVIEW_GARRISON, sim.apex_low_defense):
-                bad_now = True
-                reason = f"low believed {sim.defense_stat} at {actor_id}"
+            if review_threat is not None and sim.threat_stat is not None:
+                unrest = king.known.get(sim.subject_for(actor_id, sim.threat_stat))
+                if unrest and unrest.value > review_threat:
+                    bad_now = True
+                    reason = f"high believed {sim.threat_stat} at {actor_id}"
+            if review_defense is not None and sim.defense_stat is not None:
+                garrison = king.known.get(sim.subject_for(actor_id, sim.defense_stat))
+                if garrison and garrison.value < review_defense:
+                    bad_now = True
+                    reason = f"low believed {sim.defense_stat} at {actor_id}"
 
     prev = king.strikes.get(sub.id, 0)
     new = prev + 1 if bad_now else 0

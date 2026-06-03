@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Callable
 from .scheduler import Event, EventKind
 
 if TYPE_CHECKING:
+    from .actors import Actor
     from .sim import Simulation
 
 
@@ -193,6 +194,42 @@ def send_supplies(
     return transfer_stat(
         sim, actor_id, src_actor_id, dst_actor_id, sim.supply_stat,
         magnitude, sim.supply_stat, "send_supplies",
+    )
+
+
+def defend_location(sim: "Simulation", actor: "Actor") -> None:
+    """Spend this actor's defense stat to reduce the worst threat at their
+    current location. Genre-agnostic: defense_stat vs threat_stat from the
+    ruleset (garrison vs unrest, ships vs alien_presence, …).
+    """
+    threat_stat = sim.threat_stat
+    defense_stat = sim.defense_stat
+    if threat_stat is None or defense_stat is None:
+        return
+    holders = [a for a in sim.actors.values() if a.location == actor.location]
+    targets = [a for a in holders if a.stats.get(threat_stat, 0.0) > 0]
+    if not targets:
+        return
+    target = max(targets, key=lambda a: a.stats.get(threat_stat, 0.0))
+    before = target.stats.get(threat_stat, 0.0)
+    defense = actor.stats.get(defense_stat, 0.0)
+    reduction = min(before, defense * (4.0 + 8.0 * actor.traits.competence))
+    if reduction <= 0:
+        return
+    target.stats[threat_stat] = before - reduction
+    sim.event_log.emit(
+        sim.now,
+        "defense",
+        f"[{actor.location}] {actor.title} {actor.display_name} defends with "
+        f"{defense:.0f} {defense_stat}: {threat_stat} {before:.0f} → "
+        f"{target.stats[threat_stat]:.0f}",
+        actor=actor.id,
+        target_actor=target.id,
+        location=actor.location,
+        stat=threat_stat,
+        ships=defense,
+        before=before,
+        after=target.stats[threat_stat],
     )
 
 

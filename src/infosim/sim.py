@@ -51,14 +51,6 @@ class Simulation:
     # ergonomic.
     bus_loss_prob: float = 0.05
     bus_jitter_frac: float = 0.2
-    # Apex/middle/leaf decision thresholds. Behavior-identical scaffolding kept
-    # here for step 1; step 2 moves these into per-role RoleSpec.thresholds.
-    apex_low_defense: float = 1000.0
-    apex_low_supply: float = 800.0
-    apex_high_threat: float = 50.0
-    middle_autonomous_threat: float = 75.0
-    leaf_low_supply: float = 500.0
-    leaf_low_defense: float = 600.0
 
     def __post_init__(self) -> None:
         self.bus = MessageBus(

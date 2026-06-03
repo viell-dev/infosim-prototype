@@ -6,13 +6,11 @@ from .info_requests import (
     handle_info_response,
     maybe_initiate_audit,
 )
-from .roles import decide_commander, decide_governor, decide_king, run_policy
+from .roles import BEHAVIORS, run_policy
 
 __all__ = [
+    "BEHAVIORS",
     "_maybe_skim",
-    "decide_commander",
-    "decide_governor",
-    "decide_king",
     "dispatch_refusal_to_parent",
     "handle_info_response",
     "maybe_initiate_audit",

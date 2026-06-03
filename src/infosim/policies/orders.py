@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ..actions import move_actor, send_supplies, suppress_unrest, transfer_garrison
+from ..actions import (
+    defend_location,
+    move_actor,
+    send_supplies,
+    suppress_unrest,
+    transfer_garrison,
+)
 from ..orders import Order, OrderKind
 from .constants import SUPPRESS_DURATION
 from .hierarchy import _route_to_subordinate, _subordinates
@@ -86,6 +92,8 @@ def _handle_middle_order(sim: "Simulation", actor: "Actor", order: "Order") -> N
             )
         elif order.kind is OrderKind.MOVE_TO_LOCATION and order.target_location is not None:
             move_actor(sim, actor.id, order.target_location, order.assigned_commander)
+        elif order.kind is OrderKind.DEFEND_LOCATION:
+            defend_location(sim, actor)
         # REINFORCE / SEND_SUPPLIES targeted at self are a no-op - the
         # actor would be transferring from themselves to themselves.
         return

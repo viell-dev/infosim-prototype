@@ -6,7 +6,7 @@ from pathlib import Path
 from infosim.actors import Actor, BeliefRecord, Traits
 from infosim.logging_setup import EventLog
 from infosim.orders import Order, OrderKind
-from infosim.policies.roles import decide_king
+from infosim.policies.roles import run_policy
 from infosim.scenarios.frontier import RULESET
 from infosim.scheduler import EventKind
 from infosim.sim import Simulation
@@ -64,7 +64,7 @@ def test_king_issues_reinforce_when_belief_low(tmp_path: Path) -> None:
     sim = _sim(tmp_path)
     king = sim.actors["king"]
     king.known["cmd.garrison_strength"] = _belief(400.0)
-    decide_king(sim, king)
+    run_policy(sim, king)
     assert any(o.kind is OrderKind.REINFORCE for o in _scheduled_orders(sim))
 
 
@@ -74,7 +74,7 @@ def test_king_silent_when_belief_healthy(tmp_path: Path) -> None:
     king.known["cmd.garrison_strength"] = _belief(1500.0)
     king.known["cmd.unrest"] = _belief(10.0)
     king.known["cmd.food_stores"] = _belief(1500.0)
-    decide_king(sim, king)
+    run_policy(sim, king)
     assert _scheduled_orders(sim) == []
 
 
@@ -82,5 +82,5 @@ def test_king_orders_suppression_when_unrest_high(tmp_path: Path) -> None:
     sim = _sim(tmp_path)
     king = sim.actors["king"]
     king.known["cmd.unrest"] = _belief(80.0)
-    decide_king(sim, king)
+    run_policy(sim, king)
     assert any(o.kind is OrderKind.SUPPRESS_UNREST for o in _scheduled_orders(sim))

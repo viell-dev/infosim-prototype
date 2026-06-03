@@ -345,12 +345,6 @@ def run(seed: int, ticks: int, runs_dir: Path) -> Path:
         candidate_pool=candidate_pool(),
         bus_loss_prob=0.06,
         bus_jitter_frac=0.25,
-        apex_low_defense=7.0,
-        apex_low_supply=1200.0,
-        apex_high_threat=35.0,
-        middle_autonomous_threat=25.0,
-        leaf_low_supply=150.0,
-        leaf_low_defense=3.0,
     )
     scripted_events(sim)
     try:

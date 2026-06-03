@@ -168,23 +168,20 @@ def _split_subjects(
 
 
 def _maybe_forge_answer(sim: "Simulation", actor: "Actor", subject: str, value: float) -> float:
-    """Apply the bad-news forgery dynamic to a single answer value, driven by
-    the ruleset's stat polarity. Returns the (possibly fabricated) value.
-
-    NOTE: the literal 1000/20 bad-news cutoffs are legacy medieval magic that
-    step 2 replaces with the ruleset's per-stat bad_news_thresholds (which is a
-    deliberate behavior change re-baselined there). Kept verbatim here so this
-    relocation step changes no run output.
+    """Apply the same bad-news forgery dynamic used at report time to a single
+    answer value, driven by the ruleset's stat polarity and per-stat bad-news
+    thresholds. Returns the (possibly fabricated) value.
     """
     if actor.traits.loyalty >= 0.85:
         return value
     stat = subject.split(".", 1)[1]
     spec = sim.ruleset.stats.get(stat)
-    if spec is None:
+    threshold = sim.ruleset.bad_news_thresholds.get(stat)
+    if spec is None or threshold is None:
         return value
     is_bad_news = (
-        (spec.polarity == +1 and value < 1000.0) or
-        (spec.polarity == -1 and value > 20.0)
+        (spec.polarity == +1 and value < threshold) or
+        (spec.polarity == -1 and value > threshold)
     )
     if not is_bad_news:
         return value
