@@ -359,6 +359,11 @@ BEHAVIORS = {
 
 
 def run_policy(sim: "Simulation", actor: "Actor") -> None:
+    # A vacant office makes no decisions of its own; step 2 has its regent act
+    # for it remotely. It still observes/reports as a caretaker (handled by the
+    # OBSERVE/REPORT cadences in sim, not here).
+    if actor.vacant:
+        return
     # All actors handle their request inbox first - replies are short-cycle and
     # independent of role-specific decisions.
     _process_request_inbox(sim, actor)

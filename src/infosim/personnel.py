@@ -11,94 +11,127 @@ if TYPE_CHECKING:
 
 @dataclass
 class Candidate:
-    """A potential appointee living in the wings until summoned."""
+    """A potential occupant living in the wings until summoned to a seat."""
     id: str
     display_name: str
     traits: Traits
 
 
-def appoint(
+# An empty seat is minded by an honest caretaker staff: truthful (no forgery at
+# loyalty >= the forgery gate), incorruptible (ambition 0 -> no skim), modestly
+# competent. Decisions for the seat are made by the regent; this only governs the
+# caretaker's own observe/report so the regent hears the seat honestly.
+CARETAKER_TRAITS = Traits(
+    competence=0.5, honesty=0.9, loyalty=1.0, ambition=0.0, fear=0.0, education=0.5,
+)
+
+
+def _reset_occupant_state(office: Actor) -> None:
+    """Wipe everything that belongs to the *person*, not the *office*.
+
+    Resources (``stats``), id, location, title, parent, subordinate links, and
+    the superior's resource beliefs about this office all persist — only the
+    occupant's own beliefs, queues, tenure, and the trust they held over their
+    subordinates reset.
+    """
+    office.known = {}
+    office.inbox = []
+    office.request_inbox = []
+    office.pending_requests = {}
+    office.strikes = {}
+
+
+def install_occupant(
     sim: "Simulation",
-    new_id: str,
-    display_name: str,
-    title: str,
-    location: str,
-    commander: str | None,
-    traits: Traits,
-    report_every: float,
-    observe_every: float,
-    decide_every: float,
-    stats: dict[str, float] | None = None,
+    office: Actor,
+    superior: Actor,
+    candidate: Candidate,
+    reason: str,
 ) -> Actor:
-    """Create a new actor, wire them into the hierarchy, and put them on the schedule.
+    """Swap a new occupant into an existing office in place.
 
-    ``stats`` defaults to inheriting the dismissed actor's stockpile — the
-    physical resources don't disappear with the office holder. Pass an
-    explicit dict to override.
+    The office keeps its id, location, title, parent, resources, subordinates,
+    and the superior's resource beliefs about it. The person changes; trust
+    resets so the successor is not judged for the predecessor (the superior's
+    strikes against this office are cleared).
     """
-    actor = Actor(
-        id=new_id,
-        display_name=display_name,
-        title=title,
-        location=location,
-        commander=commander,
-        traits=traits,
-        stats=dict(stats) if stats else {},
-        report_every=report_every,
-        observe_every=observe_every,
-        decide_every=decide_every,
-        tenure_start_time=sim.now,
-    )
-    sim.actors[new_id] = actor
-    sim.schedule_actor_cadences(actor)
+    _dismiss_occupant(sim, office, reason)
+
+    office.display_name = candidate.display_name
+    office.title = office.title  # unchanged; the seat defines the role
+    office.traits = candidate.traits
+    office.occupant_id = candidate.id
+    office.vacant = False
+    office.regent = None
+    office.tenure_start_time = sim.now
+    _reset_occupant_state(office)
+    superior.strikes.pop(office.id, None)
+
     sim.event_log.emit(
         sim.now,
-        "appointed",
-        f"[{location}] {title} {display_name} takes office "
-        f"(competence {traits.competence:.2f}, honesty {traits.honesty:.2f}, "
-        f"loyalty {traits.loyalty:.2f})",
-        actor=new_id,
-        location=location,
-        title=title,
-        display_name=display_name,
-        commander=commander,
-        competence=traits.competence,
-        honesty=traits.honesty,
-        loyalty=traits.loyalty,
-        stats=dict(actor.stats),
+        "occupant_installed",
+        f"[{office.location}] {candidate.display_name} takes the {office.title} "
+        f"office (competence {candidate.traits.competence:.2f}, "
+        f"honesty {candidate.traits.honesty:.2f}, loyalty {candidate.traits.loyalty:.2f})",
+        actor=office.id,
+        location=office.location,
+        title=office.title,
+        display_name=candidate.display_name,
+        occupant_id=candidate.id,
+        competence=candidate.traits.competence,
+        honesty=candidate.traits.honesty,
+        loyalty=candidate.traits.loyalty,
+        stats=dict(office.stats),
     )
-    return actor
+    return office
 
 
-def dismiss(sim: "Simulation", actor_id: str, reason: str) -> Actor | None:
-    """Remove an actor from office. Their inbox and beliefs are lost with them.
+def vacate(sim: "Simulation", office: Actor, superior: Actor, reason: str) -> Actor:
+    """Leave an office empty under a regent (its superior governs it remotely).
 
-    Any subordinate who reported to them is left dangling; the caller is
-    expected to immediately appoint a replacement and rewire reports_to.
+    Same resets as a swap, but the seat is held by an honest caretaker so the
+    regent hears it truthfully; the regent makes the actual decisions.
     """
-    actor = sim.actors.pop(actor_id, None)
-    if actor is None:
-        return None
+    _dismiss_occupant(sim, office, reason)
+
+    office.display_name = f"(vacant {office.title})"
+    office.traits = CARETAKER_TRAITS
+    office.occupant_id = None
+    office.vacant = True
+    office.regent = superior.id
+    office.tenure_start_time = sim.now
+    _reset_occupant_state(office)
+    superior.strikes.pop(office.id, None)
+
     sim.event_log.emit(
         sim.now,
-        "dismissed",
-        f"[{actor.location}] {actor.title} {actor.display_name} dismissed: {reason}",
-        actor=actor_id,
-        location=actor.location,
-        title=actor.title,
-        display_name=actor.display_name,
-        commander=actor.commander,
+        "regency_started",
+        f"[{office.location}] {office.title} office falls vacant; governed "
+        f"remotely by {superior.display_name} ({superior.location})",
+        actor=office.id,
+        location=office.location,
+        title=office.title,
+        regent=superior.id,
+        regent_name=superior.display_name,
+    )
+    return office
+
+
+def _dismiss_occupant(sim: "Simulation", office: Actor, reason: str) -> None:
+    """Log the outgoing occupant leaving the office (the office persists)."""
+    sim.event_log.emit(
+        sim.now,
+        "occupant_dismissed",
+        f"[{office.location}] {office.title} {office.display_name} dismissed: {reason}",
+        actor=office.id,
+        location=office.location,
+        title=office.title,
+        display_name=office.display_name,
+        occupant_id=office.occupant_id,
         reason=reason,
-        tenure_time=sim.now - actor.tenure_start_time,
-        stats=dict(actor.stats),
+        tenure_time=sim.now - office.tenure_start_time,
+        stats=dict(office.stats),
     )
-    # Wipe any belief the King held that came through this person — institutional
-    # memory dies with the office holder. Beliefs whose source_chain ends with the
-    # dismissed actor are cleared so the King knows they're now stale-by-definition.
-    # Simpler approach: don't touch existing beliefs; just let the new appointee's
-    # reports overwrite them as they arrive. Less drastic and the staleness is
-    # honestly represented by age.
-    return actor
 
 
 def pick_replacement(
@@ -106,11 +139,11 @@ def pick_replacement(
     used_ids: set[str],
     king_traits: Traits,
 ) -> Candidate | None:
-    """Choose a candidate from the pool, biased by the King's own trait profile.
+    """Choose a candidate from the pool, biased by the chooser's trait profile.
 
-    A paranoid king (high fear) prioritises loyalty.
-    A scholar king (high education) prioritises competence.
-    A practical king (high honesty) prioritises honesty.
+    A paranoid chooser (high fear) prioritises loyalty.
+    A scholar (high education) prioritises competence.
+    A practical chooser (high honesty) prioritises honesty.
     Defaults to a balanced score.
     """
     available = [c for c in pool if c.id not in used_ids]

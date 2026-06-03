@@ -30,18 +30,30 @@ class BeliefRecord:
 
 @dataclass
 class Actor:
-    """One node in the hierarchy. Same shape at every depth.
+    """One office/position in the hierarchy, plus its current occupant.
 
-    A king, a governor, a commander, a captain, a trader — all use this
-    schema. They differ only in cadences, traits, the policy keyed on
-    ``title``, and what stat keys they actually populate.
+    The *office* is the durable node — its ``id``, ``location``, ``title``,
+    parent (``commander``), and ``stats`` (resources) persist across whoever
+    holds it. The *occupant* (``display_name``, ``traits``, ``known`` beliefs,
+    queues, tenure) is swapped in and out. Subordinate offices point at this
+    office's stable ``id`` and are never rewired when the occupant changes —
+    only a genuine move (``actions.move_actor``) changes a node's parent.
+
+    A king, a governor, a commander, a captain, a trader — all use this schema.
+    They differ only in cadences, traits, the RoleSpec keyed on ``title``, and
+    what stat keys they populate.
     """
-    id: str
-    display_name: str
+    id: str                     # stable office id (never changes with occupant)
+    display_name: str           # current occupant's name
     title: str                  # keys the RoleSpec in the active ruleset
     location: str               # node name in the World travel topology
-    commander: str | None       # actor id of the superior, or None for the apex
+    commander: str | None       # parent office id, or None for the apex
     traits: Traits = field(default_factory=Traits)
+    # Vacancy: when no occupant holds the office, ``vacant`` is True and
+    # ``regent`` is the office id of the superior who governs it remotely.
+    vacant: bool = False
+    regent: str | None = None
+    occupant_id: str | None = None   # which person currently holds the seat
     # Resources this actor directly controls (their authoritative numbers).
     # A commander's garrison/food/unrest; a trader's cargo/credits; a king's
     # treasury — all the same dict shape, different keys per genre/role.

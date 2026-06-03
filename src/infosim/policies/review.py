@@ -3,7 +3,7 @@ from __future__ import annotations
 import statistics
 from typing import TYPE_CHECKING
 
-from ..personnel import appoint, dismiss, pick_replacement
+from ..personnel import install_occupant, pick_replacement, vacate
 from .constants import (
     KING_STRIKES_TO_DISMISS,
     PEER_DEV_HIGH,
@@ -141,43 +141,23 @@ def _review_subordinate(sim: "Simulation", king: "Actor", sub: "Actor") -> None:
 
 
 def _dismiss_and_replace(sim: "Simulation", king: "Actor", sub: "Actor") -> None:
-    """Sack `sub` and appoint a replacement chosen by the King's trait profile."""
-    title = sub.title
-    location = sub.location
-    commander = sub.commander
-    report_every = sub.report_every
-    observe_every = sub.observe_every
-    decide_every = sub.decide_every
-    inherited_stats = dict(sub.stats)
-    deeper_subs = _subordinates(sim, sub)
+    """Remove the occupant of office ``sub`` and install a replacement if one is
+    available, otherwise leave the seat vacant under ``king`` as regent.
 
-    dismiss(sim, sub.id, reason=f"{KING_STRIKES_TO_DISMISS} consecutive bad reviews")
-    king.strikes.pop(sub.id, None)
-
+    The office is a stable node: its id, location, title, resources, and
+    subordinates persist either way. Subordinates are never rewired (they work
+    for the position, not the person). ``install_occupant`` / ``vacate`` reset
+    the new occupant's own state and clear the superior's strikes so a successor
+    is not punished for the predecessor.
+    """
+    reason = f"{KING_STRIKES_TO_DISMISS} consecutive bad reviews"
     candidate = pick_replacement(sim.candidate_pool, sim.used_candidates, king.traits)
     if candidate is None:
-        sim.event_log.emit(
-            sim.now,
-            "appointment_failed",
-            f"[{king.location}] no candidates available to replace {title} of {location}",
-            actor=king.id,
-            location=location,
-        )
+        # Already empty and no one to install — nothing to do (don't re-emit a
+        # regency for a seat that's already vacant).
+        if not sub.vacant:
+            vacate(sim, sub, king, reason=reason)
         return
+    # A candidate is available: install them (this also fills a vacant seat).
     sim.used_candidates.add(candidate.id)
-    new_actor = appoint(
-        sim,
-        new_id=candidate.id,
-        display_name=candidate.display_name,
-        title=title,
-        location=location,
-        commander=commander,
-        traits=candidate.traits,
-        stats=inherited_stats,
-        report_every=report_every,
-        observe_every=observe_every,
-        decide_every=decide_every,
-    )
-    # rewire any subordinates of the dismissed actor to point at the new one
-    for deeper in deeper_subs:
-        deeper.commander = new_actor.id
+    install_occupant(sim, sub, king, candidate, reason=reason)

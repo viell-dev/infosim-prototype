@@ -114,24 +114,8 @@ class Simulation:
                 Event(kind=EventKind.DECIDE, actor_id=actor.id),
             )
 
-    def schedule_actor_cadences(self, actor: Actor) -> None:
-        """Schedule a freshly-appointed actor's first events one cadence ahead.
-
-        Called from personnel.appoint() so a new appointee enters the rotation
-        without firing instantly at their tenure start.
-        """
-        self.scheduler.schedule(
-            self.now + actor.observe_every,
-            Event(kind=EventKind.OBSERVE, actor_id=actor.id),
-        )
-        self.scheduler.schedule(
-            self.now + actor.report_every,
-            Event(kind=EventKind.REPORT, actor_id=actor.id),
-        )
-        self.scheduler.schedule(
-            self.now + actor.decide_every,
-            Event(kind=EventKind.DECIDE, actor_id=actor.id),
-        )
+    # An occupant swap reuses the office's existing cadence events (the office id
+    # is stable), so no per-appointment scheduling is needed any more.
 
     # ---- main loop -------------------------------------------------------
 

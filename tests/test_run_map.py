@@ -39,20 +39,20 @@ def test_map_run_renders_vacant_offices_after_candidate_pool_exhaustion(tmp_path
     jsonl_path = base.with_suffix(".jsonl")
 
     events = _read_events(jsonl_path)
+    regencies = [ev for ev in events if ev["kind"] == "regency_started"]
+    assert regencies, "expected at least one office to fall vacant by t=200"
+
     checkpoints = build_checkpoints(events, "frontier")
     html = render_html(checkpoints, jsonl_path)
-
     end_state = checkpoints[-1].state
-    province = end_state.actors["vacant:Province"]
-    marches = end_state.actors["vacant:Marches"]
 
-    assert province.active
-    assert marches.active
-    assert province.commander == "king"
-    assert marches.commander == "king"
-    assert end_state.actors["cmd_aldric"].commander == "vacant:Province"
-    assert end_state.actors["cmd_talen"].commander == "vacant:Marches"
-    assert "Office: Mira of Halen -&gt;" in html
-    assert "Office: Cassia of Reach -&gt;" in html
-    assert "Office: Mira of Halen -&gt; Iselle Marn" in html
-    assert "-&gt; Vacant" in html
+    office_id = str(regencies[0]["actor"])
+    office = end_state.actors[office_id]
+    # The office is a stable node: it persists, now vacant under its regent...
+    assert office.active
+    assert office.vacant
+    assert office.regent == regencies[0]["regent"]
+    # ...and its subordinates still point at it (never rewired to the regent).
+    subs = [a for a in end_state.actors.values() if a.commander == office_id]
+    assert subs, "a vacant office should keep its subordinates"
+    assert "Vacant — governed by" in html

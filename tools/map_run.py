@@ -51,22 +51,16 @@ class ActorState:
     stats: dict[str, float]
     known: dict[str, Belief] = field(default_factory=dict)
     active: bool = True
-
-
-@dataclass
-class OfficeExit:
-    actor_id: str
-    commander: str | None
-    title: str
-    stats: dict[str, float]
-    children: list[str]
+    vacant: bool = False
+    regent: str | None = None
+    regent_name: str | None = None
 
 
 @dataclass
 class ReplayState:
     actors: dict[str, ActorState]
+    # Occupant history per office id (display names over time) for the lineage.
     office_lineages: dict[str, list[str]]
-    last_exit_by_location: dict[str, OfficeExit] = field(default_factory=dict)
 
 
 @dataclass
@@ -118,7 +112,7 @@ def _initial_state(scenario: str) -> ReplayState:
             for actor in actors.values()
         },
         office_lineages={
-            actor.location: [actor.display_name]
+            actor.id: [actor.display_name]
             for actor in actors.values()
         },
     )
@@ -145,22 +139,15 @@ def _copy_state(state: ReplayState) -> ReplayState:
                     for subject, belief in actor.known.items()
                 },
                 active=actor.active,
+                vacant=actor.vacant,
+                regent=actor.regent,
+                regent_name=actor.regent_name,
             )
             for actor_id, actor in state.actors.items()
         },
         office_lineages={
-            location: list(lineage)
-            for location, lineage in state.office_lineages.items()
-        },
-        last_exit_by_location={
-            location: OfficeExit(
-                actor_id=exit.actor_id,
-                commander=exit.commander,
-                title=exit.title,
-                stats=dict(exit.stats),
-                children=list(exit.children),
-            )
-            for location, exit in state.last_exit_by_location.items()
+            office_id: list(lineage)
+            for office_id, lineage in state.office_lineages.items()
         },
     )
 
@@ -180,14 +167,6 @@ def _format_value(value: float | None) -> str:
     if abs(value) < 0.5:
         return "0"
     return f"{value:.0f}"
-
-
-def _active_children(state: ReplayState, actor_id: str) -> list[str]:
-    return [
-        actor.id
-        for actor in state.actors.values()
-        if actor.active and actor.commander == actor_id
-    ]
 
 
 def _event_display_name(ev: dict[str, Any]) -> str:
@@ -298,65 +277,25 @@ def _apply_event(state: ReplayState, ev: dict[str, Any]) -> None:
             state.actors[str(ev["target_actor"])].stats[str(ev["stat"])] = float(ev["after"])
         return
 
-    if kind == "dismissed" and actor_id in state.actors:
-        actor = state.actors[actor_id]
-        actor.active = False
-        state.last_exit_by_location[actor.location] = OfficeExit(
-            actor_id=actor.id,
-            commander=actor.commander,
-            title=actor.title,
-            stats=dict(actor.stats),
-            children=_active_children(state, actor.id),
-        )
+    # Office id is stable across occupants; the node persists. occupant_dismissed
+    # is informational (the install/regency that follows updates the node).
+    if kind == "occupant_installed" and actor_id in state.actors:
+        office = state.actors[actor_id]
+        office.display_name = _event_display_name(ev)
+        office.title = str(ev.get("title") or office.title)
+        office.vacant = False
+        office.regent = None
+        office.regent_name = None
+        state.office_lineages.setdefault(actor_id, []).append(office.display_name)
         return
 
-    if kind == "appointed":
-        location = str(ev["location"])
-        prior = state.last_exit_by_location.get(location)
-        new_id = str(ev["actor"])
-        for actor in state.actors.values():
-            if actor.active and actor.location == location and actor.id.startswith("vacant:"):
-                actor.active = False
-        new_actor = ActorState(
-            id=new_id,
-            display_name=_event_display_name(ev),
-            title=str(ev.get("title") or (prior.title if prior else "Actor")),
-            location=location,
-            commander=ev.get("commander") if ev.get("commander") is not None else (
-                prior.commander if prior else None
-            ),
-            stats={
-                key: float(value)
-                for key, value in dict(ev.get("stats") or (prior.stats if prior else {})).items()
-            },
-        )
-        state.actors[new_id] = new_actor
-        state.office_lineages.setdefault(location, []).append(new_actor.display_name)
-        if prior:
-            for child_id in prior.children:
-                if child_id in state.actors and state.actors[child_id].active:
-                    state.actors[child_id].commander = new_id
-        return
-
-    if kind == "appointment_failed":
-        location = str(ev["location"])
-        prior = state.last_exit_by_location.get(location)
-        if prior is None:
-            return
-        vacant_id = f"vacant:{location}"
-        vacant_actor = ActorState(
-            id=vacant_id,
-            display_name="Vacant",
-            title=prior.title,
-            location=location,
-            commander=prior.commander,
-            stats=dict(prior.stats),
-        )
-        state.actors[vacant_id] = vacant_actor
-        state.office_lineages.setdefault(location, []).append("Vacant")
-        for child_id in prior.children:
-            if child_id in state.actors and state.actors[child_id].active:
-                state.actors[child_id].commander = vacant_id
+    if kind == "regency_started" and actor_id in state.actors:
+        office = state.actors[actor_id]
+        office.vacant = True
+        office.regent = str(ev.get("regent")) if ev.get("regent") is not None else None
+        office.regent_name = ev.get("regent_name")
+        office.display_name = "Vacant"
+        state.office_lineages.setdefault(actor_id, []).append("Vacant")
         return
 
 
@@ -441,10 +380,15 @@ def _render_actor(
     king: ActorState | None,
     stats_schema: list[str],
 ) -> str:
-    lineage = state.office_lineages.get(actor.location, [])
+    lineage = state.office_lineages.get(actor.id, [])
     office = ""
     if len(lineage) > 1:
         office = f'<div class="lineage">Office: {html.escape(" -> ".join(lineage))}</div>'
+    if actor.vacant:
+        regent = actor.regent_name or actor.regent or "superior"
+        office += (
+            f'<div class="lineage">Vacant — governed by {html.escape(str(regent))}</div>'
+        )
 
     rows = []
     for stat in stats_schema:
