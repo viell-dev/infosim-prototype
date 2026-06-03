@@ -168,6 +168,7 @@ def suppress_unrest(
             actor=actor_id,
             kind_detail="suppress_unrest_resolve",
             target_actor=target_actor_id,
+            stat=sim.threat_stat,
             outcome=outcome,
             before=before,
             after=after,

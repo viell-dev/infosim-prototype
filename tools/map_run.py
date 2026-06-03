@@ -22,7 +22,6 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from infosim.actors import Actor  # noqa: E402
-from infosim.world import STATS  # noqa: E402
 
 
 CHECKPOINTS = (
@@ -244,73 +243,59 @@ def _apply_event(state: ReplayState, ev: dict[str, Any]) -> None:
             )
         return
 
+    # --- generic economy application ------------------------------------------
+    # Every economy event now carries a `stat` field, so the replay is
+    # genre-agnostic: no garrison/ore/alien_presence names appear here.
+
+    # Set a stat to an absolute value (own actor).
     if kind == "true_state_change" and actor_id in state.actors:
         state.actors[actor_id].stats[str(ev["stat"])] = float(ev["after"])
         return
 
-    if kind == "alien_contact" and actor_id in state.actors:
-        state.actors[actor_id].stats["alien_presence"] = float(ev["after"])
+    # Set a stat to an absolute value on whichever actor the event names.
+    if kind in {"alien_contact", "defense"}:
+        target = str(ev.get("target_actor") or actor_id or "")
+        if target in state.actors and ev.get("stat") is not None and "after" in ev:
+            state.actors[target].stats[str(ev["stat"])] = float(ev["after"])
         return
 
-    if kind == "mining" and actor_id in state.actors:
+    # Add to a stat (production).
+    if kind == "mining" and actor_id in state.actors and ev.get("stat") is not None:
         stats = state.actors[actor_id].stats
-        stats["ore"] = stats.get("ore", 0.0) + float(ev["amount"])
+        stat = str(ev["stat"])
+        stats[stat] = stats.get(stat, 0.0) + float(ev["amount"])
         return
 
-    if kind == "consumption" and actor_id in state.actors:
+    # Subtract from a stat (usage / skim).
+    if kind in {"consumption", "skim"} and actor_id in state.actors and ev.get("stat") is not None:
         stats = state.actors[actor_id].stats
-        stats["ore"] = max(0.0, stats.get("ore", 0.0) - float(ev["amount"]))
-        return
-
-    if kind == "defense" and ev.get("target_actor") in state.actors:
-        state.actors[str(ev["target_actor"])].stats["alien_presence"] = float(ev["after"])
-        return
-
-    if kind == "skim" and actor_id in state.actors:
-        stats = state.actors[actor_id].stats
-        stat = str(ev.get("stat") or ("ore" if "ore" in stats else "food_stores"))
+        stat = str(ev["stat"])
         stats[stat] = max(0.0, stats.get(stat, 0.0) - float(ev["amount"]))
         return
 
+    # Transfers depart: any action carrying a stat + source actor + magnitude.
     if kind == "action_started":
-        detail = ev.get("kind_detail")
-        if (
-            detail in {"transfer_garrison", "send_supplies", "ore_tax", "manager_tax"}
-            and ev.get("src_actor") in state.actors
-        ):
+        if ev.get("stat") is not None and ev.get("src_actor") in state.actors:
             stats = state.actors[str(ev["src_actor"])].stats
-            stat = str(ev.get("stat") or (
-                "garrison_strength" if detail == "transfer_garrison" else "food_stores"
-            ))
-            stats[stat] = max(
-                0.0,
-                stats.get(stat, 0.0) - float(ev["magnitude"]),
-            )
+            stat = str(ev["stat"])
+            stats[stat] = max(0.0, stats.get(stat, 0.0) - float(ev["magnitude"]))
         return
 
     if kind == "action_completed":
         detail = ev.get("kind_detail")
-        if (
-            detail in {
-                "transfer_garrison_arrive",
-                "send_supplies_arrive",
-                "ore_tax_arrive",
-                "manager_tax_arrive",
-            }
-            and ev.get("dst_actor") in state.actors
-        ):
-            stats = state.actors[str(ev["dst_actor"])].stats
-            stat = str(ev.get("stat") or (
-                "garrison_strength" if detail == "transfer_garrison_arrive" else "food_stores"
-            ))
-            stats[stat] = stats.get(stat, 0.0) + float(ev["magnitude"])
-        elif detail == "move_actor_arrive" and actor_id in state.actors:
+        if detail == "move_actor_arrive" and actor_id in state.actors:
             actor = state.actors[actor_id]
             actor.location = str(ev["target_location"])
             if ev.get("assigned_commander") is not None:
                 actor.commander = str(ev["assigned_commander"])
-        elif detail == "suppress_unrest_resolve" and ev.get("target_actor") in state.actors:
-            state.actors[str(ev["target_actor"])].stats["unrest"] = float(ev["after"])
+        elif ev.get("stat") is not None and ev.get("dst_actor") in state.actors and "magnitude" in ev:
+            # Transfer arrives.
+            stats = state.actors[str(ev["dst_actor"])].stats
+            stat = str(ev["stat"])
+            stats[stat] = stats.get(stat, 0.0) + float(ev["magnitude"])
+        elif ev.get("stat") is not None and ev.get("target_actor") in state.actors and "after" in ev:
+            # Suppression resolves to an absolute value.
+            state.actors[str(ev["target_actor"])].stats[str(ev["stat"])] = float(ev["after"])
         return
 
     if kind == "dismissed" and actor_id in state.actors:
@@ -438,14 +423,31 @@ def _chain_label(state: ReplayState, chain: list[str]) -> str:
     return " -> ".join(names)
 
 
-def _render_actor(state: ReplayState, actor: ActorState, king: ActorState | None) -> str:
+def _stats_in_state(state: ReplayState) -> list[str]:
+    """Union of stat keys present on any actor — the run's effective stat schema.
+
+    Genre-agnostic: a frontier run shows garrison/food/unrest, a space run shows
+    ore/ships/population/alien_presence, with no cross-genre empty rows.
+    """
+    stats: set[str] = set()
+    for actor in state.actors.values():
+        stats.update(actor.stats.keys())
+    return sorted(stats)
+
+
+def _render_actor(
+    state: ReplayState,
+    actor: ActorState,
+    king: ActorState | None,
+    stats_schema: list[str],
+) -> str:
     lineage = state.office_lineages.get(actor.location, [])
     office = ""
     if len(lineage) > 1:
         office = f'<div class="lineage">Office: {html.escape(" -> ".join(lineage))}</div>'
 
     rows = []
-    for stat in sorted(STATS):
+    for stat in stats_schema:
         subject = f"{actor.id}.{stat}"
         self_belief = actor.known.get(subject)
         king_belief = king.known.get(subject) if king else None
@@ -466,7 +468,7 @@ def _render_actor(state: ReplayState, actor: ActorState, king: ActorState | None
         )
 
     rendered_children = "".join(
-        _render_actor(state, child, king)
+        _render_actor(state, child, king, stats_schema)
         for child in _children(state, actor.id)
     )
     children_html = f'<div class="children">{rendered_children}</div>' if rendered_children else ""
@@ -492,7 +494,10 @@ def render_html(checkpoints: list[Checkpoint], source_path: Path) -> str:
     for checkpoint in checkpoints:
         state = checkpoint.state
         apex = state.actors.get("king") or state.actors.get("ceo")
-        tree = "".join(_render_actor(state, root, apex) for root in _roots(state))
+        stats_schema = _stats_in_state(state)
+        tree = "".join(
+            _render_actor(state, root, apex, stats_schema) for root in _roots(state)
+        )
         blocks.append(
             '<article class="checkpoint">'
             f"<h2>{html.escape(checkpoint.label)} <span>t={checkpoint.time:.0f}</span></h2>"

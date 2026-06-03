@@ -85,19 +85,28 @@ JSONL path to map a specific run.
 ## Code layout
 
 - `src/infosim/sim.py` is the discrete-event engine: scheduling, actor cadences,
-  message arrival handling, observations, and pushed reports.
+  message arrival handling, observations, and pushed reports. It is
+  genre-agnostic — it holds no stat names, only a `Ruleset`.
+- `src/infosim/ruleset.py` defines the scenario-owned configuration: the stat
+  schema (with polarity), the defense / supply / threat stat-role mapping, and a
+  `RoleSpec` per actor title declaring that role's ordered behaviors plus its
+  production / decay (usage) / tax (upward transfer) specs and thresholds. The
+  core ships no concrete ruleset; each scenario builds its own.
 - `src/infosim/policies/` holds decision and political behavior:
-  `roles.py` dispatches King / Governor / Commander and CEO / Manager / Captain decisions, `orders.py`
-  routes and executes downward orders, `info_requests.py` owns the pull-based
-  request / response path, `review.py` handles strikes and replacement,
-  `corruption.py` handles skimming, and `constants.py` keeps the current
-  scenario thresholds in one place.
+  `roles.py` is the generic behavior registry (`BEHAVIORS` + `run_policy`) — one
+  decide pipeline driven by the actor's `RoleSpec`, no per-title functions;
+  `orders.py` routes and executes downward orders, `info_requests.py` owns the
+  pull-based request / response path, `review.py` handles strikes and
+  replacement, `corruption.py` handles skimming, and `constants.py` keeps only
+  genre-neutral institution tuning (the genre numbers live in each scenario's
+  ruleset).
 - `src/infosim/policy.py` is a compatibility facade for older experiments that
   imported policy helpers directly.
 - `src/infosim/actions.py`, `messages.py`, `reports.py`, `requests.py`,
-  `orders.py`, `scheduler.py`, `world.py`, and `personnel.py` are focused
-  data / mechanics modules used by the engine and policies.
-- `src/infosim/scenarios/` wires concrete worlds and actors; `tools/` contains
+  `orders.py`, `scheduler.py`, `world.py` (topology only), and `personnel.py`
+  are focused data / mechanics modules used by the engine and policies.
+- `src/infosim/scenarios/` wires concrete worlds, actors, and a `RULESET`;
+  `tools/` contains
   analysis helpers. `tools/inspect_run.py` filters raw JSONL events, and
   `tools/map_run.py` replays a run into a plain HTML debug map sampled at
   start / 25% / 50% / 75% / end. `tests/` mirrors the purpose-specific
@@ -253,6 +262,49 @@ they can be answered.
 ## Observations log
 
 Append-only. Add notes as the design evolves.
+
+### 2026-06-03 — Scenario-owned rulesets: resources & roles as data (Claude Opus 4.8 via Claude Code)
+
+Cleanup pass before M4, resolving the "generic-genre claim is aspirational"
+caveat from the 2026-06-02 structure review. The engine no longer hard-codes any
+genre. A scenario now hands the `Simulation` a `Ruleset` (`src/infosim/ruleset.py`)
+that declares its stat schema (polarity), the defense/supply/threat stat roles,
+per-stat bad-news thresholds, and a `RoleSpec` per title. Each `RoleSpec` lists
+that role's ordered generic behaviors plus its production / decay (usage) /
+tax (upward) specs and decision thresholds — all data, no code per genre.
+
+Four commits, each green:
+
+1. **Ruleset + schema relocation.** Stat schema moved off `world.py`; `sim.py`
+   reads polarity/thresholds from the ruleset; `reports.forge_value`/`relay` take
+   the schema as an argument. Pure relocation — run output byte-identical
+   (determinism + full sweep aggregate unchanged).
+2. **Generic behavior registry.** `decide_king/governor/commander/captain/
+   manager/ceo` and `POLICY_BY_TITLE` are gone. `run_policy` runs the actor's
+   `RoleSpec.behaviors` from a `BEHAVIORS` table: skim, produce, consume, tax,
+   execute_orders, issue_orders, apex_defense_orders, autonomous_suppress,
+   local_defense_orders, defend, urgent_reports. `defend_location` moved to
+   `actions.py`; leaf order execution unified through `_handle_middle_order`
+   (now handles DEFEND-to-self). One deliberate behavior change: info-request
+   forgery now uses the ruleset's per-stat bad-news thresholds instead of literal
+   1000/20 — frontier unaffected, space_miner shifts slightly. Frontier
+   determinism and the entire sweep aggregate stayed byte-identical, confirming
+   the medieval path was preserved exactly.
+3. **Removed back-compat shims.** `actor.region`/`reports_to`, `world.regions`/
+   `add_region`/`Region()`, `world.VARIABLES`/`STATS`. `world.py` is now pure
+   topology.
+4. **Genre-agnostic map replay.** Economy events (mining/consumption/defense/
+   skim/transfers/suppression) all carry a `stat` field; `tools/map_run.py`
+   applies them generically and renders the union of stats actually present, so
+   a frontier map shows garrison/food/unrest and a space map shows
+   ore/ships/population/alien_presence with no cross-genre rows.
+
+Validation: `python3 tests/_runner.py` → 37/37 (added `tests/test_ruleset.py`:
+captain mines+taxes from role data; genre isolation). `tools/sweep.py` aggregate
+identical to the pre-cleanup baseline (report_forged 64.1, skim 42.4,
+order_dispatched 44.2, action_completed 28.4, 100/100). Both genre maps render
+cleanly. Adding a new genre is now a config-only change: define a `Ruleset` and
+build actors — no core edits.
 
 ### 2026-06-02 — Space-miner map replay fix (GPT-5 via Codex)
 

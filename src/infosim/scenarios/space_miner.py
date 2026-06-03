@@ -270,6 +270,7 @@ def _alien(sim: Simulation, location: str, amount: float, cause: str) -> None:
         f"{holder.stats['alien_presence']:.0f}",
         actor=holder.id,
         location=location,
+        stat="alien_presence",
         before=before,
         after=holder.stats["alien_presence"],
         cause=cause,

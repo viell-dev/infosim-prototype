@@ -2,22 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .ruleset import StatSpec
-
-# Union of every stat any bundled scenario uses. The genre schema now lives in
-# each scenario's Ruleset; this union is only scaffolding for tools/map_run.py
-# (the replay tool has no Ruleset to consult). Removed once map_run renders the
-# union of stats actually present on replayed actors.
-STATS: dict[str, StatSpec] = {
-    "garrison_strength": StatSpec("garrison_strength", polarity=+1),
-    "food_stores":       StatSpec("food_stores",       polarity=+1),
-    "unrest":            StatSpec("unrest",            polarity=-1),
-    "ships":             StatSpec("ships",             polarity=+1),
-    "ore":               StatSpec("ore",               polarity=+1),
-    "population":        StatSpec("population",        polarity=+1),
-    "alien_presence":    StatSpec("alien_presence",    polarity=-1),
-}
-
 
 @dataclass
 class Location:
