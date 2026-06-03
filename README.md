@@ -263,6 +263,23 @@ they can be answered.
 
 Append-only. Add notes as the design evolves.
 
+### 2026-06-03 — Isekai kingdom grid scenario sketch (GPT-5 via Codex)
+
+Added `docs/isekai-kingdom-scenario.md`, a first-pass scenario design for a
+more complex fantasy kingdom setup. The sketch defines a 5x5 region board with
+fixed geography (`C3` capital, `C1` empire trade, `C5` ocean trade, forest west,
+mountains east), randomized Noble/Royal ownership, 0-3 settlements per region,
+resource-focused settlement specializations, race-split pops and military
+resources, Mayor/Noble/King tax flow, Noble and crown stockpiles, town/city
+Guard Captains, monsters, forest elves, succession, random actor death, and
+race prejudice/preference hooks.
+
+No implementation or balance numbers yet. The purpose is to preserve the
+worldbuilding constraints and identify the system pressures this scenario
+should create: food-tax dependence, trade asymmetry, pollution from mining,
+monster uncertainty, migration pressure, unequal Royal influence, and
+overlapping reports from guards, mayors, Nobles, and neighboring regions.
+
 ### 2026-06-03 — Position-centric offices + remote regency for vacant seats (Claude Opus 4.8 via Claude Code)
 
 Reworked the hierarchy so you "work for the position, not the person," and made
