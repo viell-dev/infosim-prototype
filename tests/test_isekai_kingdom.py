@@ -47,6 +47,10 @@ def test_kingdom_generation_honors_map_and_ownership_constraints() -> None:
         setup.regions[coord].developed
         for coord in (CAPITAL, setup.king_second_region)
     )
+    assert "crown_demesne" not in setup.actors
+    assert all(actor.title != "Crown Steward" for actor in setup.actors.values())
+    assert setup.actors[_mayor_id(CAPITAL)].commander == "king"
+    assert setup.actors[_mayor_id(setup.king_second_region)].commander == "king"
 
     eligible = [
         region for region in setup.regions.values()
@@ -61,6 +65,12 @@ def test_kingdom_run_emits_setup_economy_politics_and_shocks(tmp_path) -> None:
     base = run(seed=1, ticks=130, runs_dir=tmp_path)
     events = _read_events(base.with_suffix(".jsonl"))
     kinds = {str(ev["kind"]) for ev in events}
+    setup = generate(seed=1)
+    crown_mayors = {
+        _mayor_id(region.coord)
+        for region in setup.regions.values()
+        if region.owner_id == "king"
+    }
 
     assert {
         "scenario_setup",
@@ -87,6 +97,10 @@ def test_kingdom_run_emits_setup_economy_politics_and_shocks(tmp_path) -> None:
         and ev.get("cause") in {"coastal granary fire", "mine tunnel breach"}
         for ev in events
     )
+    assert not any(
+        ev["kind"] == "review_strike" and ev.get("subordinate") in crown_mayors
+        for ev in events
+    )
 
 
 def test_kingdom_map_replay_uses_seeded_initial_state(tmp_path) -> None:
@@ -104,4 +118,4 @@ def test_kingdom_map_replay_uses_seeded_initial_state(tmp_path) -> None:
     assert seed == 3
     assert set(start_state.actors) == set(setup.actors)
     second = setup.king_second_region
-    assert start_state.actors[_mayor_id(second)].commander == "crown_demesne"
+    assert start_state.actors[_mayor_id(second)].commander == "king"

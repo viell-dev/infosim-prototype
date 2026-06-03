@@ -157,7 +157,7 @@ def behavior_issue_orders(sim: "Simulation", office: "Actor", principal: "Actor"
             _maybe_reinforce(sim, actor, sub, deeper.id, low_defense)
             _maybe_suppress(sim, actor, sub, deeper.id, high_threat)
             _maybe_send_supplies(sim, actor, sub, deeper.id, low_supply)
-        _review_subordinate(sim, actor, sub)
+        _review_subordinate(sim, actor, sub, peer_titles=role.review_titles)
 
 
 def _maybe_reinforce(

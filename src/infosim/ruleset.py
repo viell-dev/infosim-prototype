@@ -75,6 +75,10 @@ class RoleSpec:
       autonomous_threat                      — middle autonomous suppression
       leaf_low_supply / leaf_low_defense     — leaf urgent-report triggers
       review_threat / review_defense         — single-sub review fallback
+
+    ``review_titles`` optionally narrows which direct subordinates are judged
+    as peers by apex review. ``None`` means all direct subordinates, preserving
+    the default behavior for existing scenarios.
     """
     title: str
     behaviors: tuple[str, ...]
@@ -82,6 +86,7 @@ class RoleSpec:
     decay: tuple[DecaySpec, ...] = ()
     tax: tuple[TaxSpec, ...] = ()
     thresholds: Mapping[str, float] = field(default_factory=dict)
+    review_titles: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)

@@ -273,8 +273,8 @@ Implemented `infosim.scenarios.isekai_kingdom` from
 scenario now creates all 25 regions with fixed anchors (`C3`, `C1`, `C5`),
 seeded Noble/Royal ownership, King-held capital plus a non-adjacent coastal
 food-tax region, 0-3 settlements per region, race-split population stats,
-Mayor offices, town/city Guard Captains, a Crown Steward for royal demesne
-holdings, Noble stockpiles, and structured startup logs for generated
+Mayor offices, town/city Guard Captains, direct Mayor reporting for the King's
+own regions, Noble stockpiles, and structured startup logs for generated
 settlement, geography, prejudice, and preference metadata.
 
 The engine-facing pass keeps to generic mechanics already proven by the
@@ -289,6 +289,12 @@ The addendum about undeveloped regions is encoded directly: King regions,
 undeveloped chance, and `undeveloped_probability()` increases monotonically
 with the owning Noble's holding count. `just run` / `just map` now support
 `isekai_kingdom` and seed-aware map replay.
+
+Follow-up correction: the King position is itself both Noble and Royal in this
+scenario, so the implementation no longer creates a separate Crown Steward
+actor. The King's own Mayors report directly to `king`; the King's peer review
+is filtered to direct Noble/Royal Noble vassals so crown-region Mayors are not
+compared against noble houses.
 
 Validated with `just check` plus a six-seed, 220-tick balance pass. The sample
 kept holdings mostly within a one-region spread, produced 3-6 undeveloped

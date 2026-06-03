@@ -73,7 +73,7 @@ RULESET = Ruleset(
     roles={
         "King": RoleSpec(
             title="King",
-            behaviors=("issue_orders",),
+            behaviors=("issue_orders", "consume"),
             decay=(
                 DecaySpec(stat="food_stores", rate=0.006, driver_stat="population"),
                 DecaySpec(stat="money", rate=0.001),
@@ -85,6 +85,7 @@ RULESET = Ruleset(
                 "review_threat": 70.0,
                 "review_defense": 140.0,
             },
+            review_titles=("Noble", "Royal Noble"),
         ),
         "Noble": RoleSpec(
             title="Noble",
@@ -111,19 +112,6 @@ RULESET = Ruleset(
                 TaxSpec(stat="money", fraction=0.018, label="royal_coin_tax"),
             ),
             thresholds={"autonomous_threat": 74.0},
-        ),
-        "Crown Steward": RoleSpec(
-            title="Crown Steward",
-            behaviors=("execute_orders", "consume", "tax", "autonomous_suppress"),
-            decay=(
-                DecaySpec(stat="food_stores", rate=0.003, driver_stat="population"),
-                DecaySpec(stat="money", rate=0.002),
-            ),
-            tax=(
-                TaxSpec(stat="food_stores", fraction=0.045, label="crown_food_tax"),
-                TaxSpec(stat="money", fraction=0.035, label="crown_coin_tax"),
-            ),
-            thresholds={"autonomous_threat": 68.0},
         ),
         "Mayor": RoleSpec(
             title="Mayor",
@@ -477,33 +465,6 @@ def _build_actors(
         decide_every=28,
     ))
 
-    add(Actor(
-        id="crown_demesne",
-        display_name="Crown Demesne Council",
-        title="Crown Steward",
-        location=CAPITAL,
-        commander="king",
-        traits=Traits(competence=0.66, honesty=0.82, loyalty=0.96, ambition=0.18,
-                      fear=0.20, education=0.72),
-        stats={
-            "food_stores": 900.0 + sum(r.stats["food_stores"] * 0.18 for r in king_regions),
-            "soldiers": 240.0,
-            "monster_pressure": max(r.stats["monster_pressure"] for r in king_regions) * 0.35,
-            "unrest": sum(r.stats["unrest"] for r in king_regions) / len(king_regions),
-            "population": king_population,
-            "money": 680.0 + sum(r.stats["money"] * 0.16 for r in king_regions),
-            "lumber": sum(r.stats["lumber"] * 0.12 for r in king_regions),
-            "herbs": sum(r.stats["herbs"] * 0.12 for r in king_regions),
-            "ore": sum(r.stats["ore"] * 0.12 for r in king_regions),
-            "wares": sum(r.stats["wares"] * 0.12 for r in king_regions),
-            "weapons": 220.0 + sum(r.stats["weapons"] * 0.12 for r in king_regions),
-            "warriors": 18.0,
-        },
-        report_every=13,
-        observe_every=7,
-        decide_every=11,
-    ))
-
     for noble in nobles.values():
         holding_stats = [regions[coord].stats for coord in noble.holdings]
         title = "Royal Noble" if noble.is_royal else "Noble"
@@ -540,7 +501,7 @@ def _build_actors(
             display_name=_mayor_name(rng, region.coord, region.developed),
             title="Mayor",
             location=region.coord,
-            commander="crown_demesne" if region.owner_id == "king" else region.owner_id,
+            commander=region.owner_id,
             traits=_mayor_traits(rng, region),
             stats=dict(region.stats),
             report_every=9,

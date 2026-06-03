@@ -57,14 +57,25 @@ def _chain_health(sim: "Simulation", king: "Actor", sub: "Actor") -> float | Non
     return score if saw_any else None
 
 
-def _review_subordinate(sim: "Simulation", king: "Actor", sub: "Actor") -> None:
+def _review_subordinate(
+    sim: "Simulation",
+    king: "Actor",
+    sub: "Actor",
+    peer_titles: tuple[str, ...] | None = None,
+) -> None:
     """Award or clear a strike against this subordinate.
 
     With >=2 direct subordinates the review is *comparative* — chain-health
     vs. peer median, with separate strikes for "underperforming" and
     "suspiciously rosy." With a single sub, fall back to absolute thresholds.
     """
-    peers = _subordinates(sim, king)
+    if peer_titles is not None and sub.title not in peer_titles:
+        king.strikes.pop(sub.id, None)
+        return
+    peers = [
+        peer for peer in _subordinates(sim, king)
+        if peer_titles is None or peer.title in peer_titles
+    ]
     reason: str | None = None
 
     if len(peers) >= 2:
