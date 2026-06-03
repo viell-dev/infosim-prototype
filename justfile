@@ -12,7 +12,7 @@ test:
 check: test
     @python3 -m compileall -q src tests tools
 
-# Run a scenario: scenario can be "frontier", "deep_chain", "deepchain", or "space_miner".
+# Run a scenario: scenario can be "frontier", "deep_chain", "space_miner", or "isekai_kingdom".
 run scenario="frontier" seed="1" ticks="200" runs_dir="runs":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -26,13 +26,22 @@ run scenario="frontier" seed="1" ticks="200" runs_dir="runs":
         space_miner|spaceminer)
             module="infosim.scenarios.space_miner"
             ;;
+        isekai_kingdom|isekaikingdom|isekai-kingdom)
+            module="infosim.scenarios.isekai_kingdom"
+            ;;
         *)
             echo "Unknown scenario: {{scenario}}" >&2
             exit 2
             ;;
     esac
     output=$(PYTHONPATH=src python3 -m "$module" --seed "{{seed}}" --ticks "{{ticks}}" --runs-dir "{{runs_dir}}")
-    paths="${output#Wrote }"
+    wrote_line=$(printf '%s\n' "$output" | awk '/^Wrote / { line = $0 } END { print line }')
+    if [ -z "$wrote_line" ]; then
+        printf '%s\n' "$output" >&2
+        echo "Scenario did not print output paths" >&2
+        exit 2
+    fi
+    paths="${wrote_line#Wrote }"
     jsonl_path="${paths%% and *}"
     log_path="${paths##* and }"
     echo "JSONL: $(realpath "$jsonl_path")"
@@ -49,6 +58,10 @@ deep-chain seed="1" ticks="400" runs_dir="runs":
 # Run the space-miner scenario.
 space-miner seed="1" ticks="500" runs_dir="runs":
     @just run space_miner "{{seed}}" "{{ticks}}" "{{runs_dir}}"
+
+# Run the isekai kingdom grid scenario.
+isekai-kingdom seed="1" ticks="400" runs_dir="runs":
+    @just run isekai_kingdom "{{seed}}" "{{ticks}}" "{{runs_dir}}"
 
 # Generate a plain HTML debug map. Defaults to the latest runs/*.jsonl file.
 map path="" scenario="" out="":

@@ -70,7 +70,7 @@ class Checkpoint:
     state: ReplayState
 
 
-def _scenario_build(name: str) -> tuple[Any, dict[str, Actor]]:
+def _scenario_build(name: str, seed: int | None = None) -> tuple[Any, dict[str, Actor]]:
     if name == "frontier":
         from infosim.scenarios import frontier
 
@@ -83,6 +83,10 @@ def _scenario_build(name: str) -> tuple[Any, dict[str, Actor]]:
         from infosim.scenarios import space_miner
 
         return space_miner.build()
+    if name in {"isekai_kingdom", "isekaikingdom", "isekai-kingdom"}:
+        from infosim.scenarios import isekai_kingdom
+
+        return isekai_kingdom.build(seed=seed or 1)
     raise ValueError(f"unknown scenario: {name}")
 
 
@@ -94,11 +98,18 @@ def _infer_scenario(path: Path) -> str:
         return "deep_chain"
     if stem.startswith("space_miner-") or stem.startswith("spaceminer-"):
         return "space_miner"
+    if stem.startswith("isekai_kingdom-") or stem.startswith("isekaikingdom-"):
+        return "isekai_kingdom"
     raise ValueError("could not infer scenario from filename; pass --scenario")
 
 
-def _initial_state(scenario: str) -> ReplayState:
-    _world, actors = _scenario_build(scenario)
+def _infer_seed(path: Path) -> int | None:
+    match = re.search(r"-seed(\d+)-", path.stem)
+    return int(match.group(1)) if match else None
+
+
+def _initial_state(scenario: str, seed: int | None = None) -> ReplayState:
+    _world, actors = _scenario_build(scenario, seed=seed)
     state = ReplayState(
         actors={
             actor.id: ActorState(
@@ -299,10 +310,14 @@ def _apply_event(state: ReplayState, ev: dict[str, Any]) -> None:
         return
 
 
-def build_checkpoints(events: list[dict[str, Any]], scenario: str) -> list[Checkpoint]:
+def build_checkpoints(
+    events: list[dict[str, Any]],
+    scenario: str,
+    seed: int | None = None,
+) -> list[Checkpoint]:
     end_time = max(float(ev.get("time", 0.0)) for ev in events) if events else 0.0
     targets = [(label, end_time * fraction) for label, fraction in CHECKPOINTS]
-    state = _initial_state(scenario)
+    state = _initial_state(scenario, seed=seed)
     checkpoints: list[Checkpoint] = []
     event_index = 0
 
@@ -559,7 +574,16 @@ def main() -> None:
     parser.add_argument("path", type=Path, help="run JSONL file")
     parser.add_argument(
         "--scenario",
-        choices=("frontier", "deep_chain", "deepchain", "space_miner", "spaceminer"),
+        choices=(
+            "frontier",
+            "deep_chain",
+            "deepchain",
+            "space_miner",
+            "spaceminer",
+            "isekai_kingdom",
+            "isekaikingdom",
+            "isekai-kingdom",
+        ),
     )
     parser.add_argument("--out", type=Path)
     args = parser.parse_args()
@@ -567,8 +591,9 @@ def main() -> None:
     if not args.path.exists():
         raise SystemExit(f"no such file: {args.path}")
     scenario = args.scenario or _infer_scenario(args.path)
+    seed = _infer_seed(args.path)
     events = _read_events(args.path)
-    checkpoints = build_checkpoints(events, scenario)
+    checkpoints = build_checkpoints(events, scenario, seed=seed)
     output_path = args.out or args.path.with_name(f"{args.path.stem}-map.html")
     output_path.write_text(render_html(checkpoints, args.path), encoding="utf-8")
     print(f"Wrote {output_path}")

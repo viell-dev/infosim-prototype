@@ -59,6 +59,9 @@ just run deep_chain 1 400
 # space-miner scenario, seed 1, 500 ticks by default
 just space-miner
 
+# generated isekai kingdom grid scenario, seed 1, 400 ticks by default
+just isekai-kingdom
+
 # inspect a run
 just inspect-kind runs/frontier-seed1-20260602-220543.jsonl dispatch
 just inspect-region runs/frontier-seed1-20260602-220543.jsonl Frontier
@@ -75,8 +78,8 @@ just stress 50 300
 ```
 
 Outputs land in `runs/<scenario>-seed<N>-<timestamp>.{jsonl,log}`.
-`just run`, `just frontier`, `just deep-chain`, and `just space-miner` print the generated JSONL
-and log filenames as full paths. `just map` writes a sibling `*-map.html` file
+`just run`, `just frontier`, `just deep-chain`, `just space-miner`, and `just isekai-kingdom`
+print the generated JSONL and log filenames as full paths. `just map` writes a sibling `*-map.html` file
 for the latest `runs/*.jsonl` by default and prints the full HTML path. Pass a
 JSONL path to map a specific run.
 
@@ -262,6 +265,37 @@ they can be answered.
 ## Observations log
 
 Append-only. Add notes as the design evolves.
+
+### 2026-06-03 — Isekai kingdom grid scenario implemented (GPT-5 via Codex)
+
+Implemented `infosim.scenarios.isekai_kingdom` from
+`docs/isekai-kingdom-scenario.md` as a generated 5x5 kingdom scenario. The
+scenario now creates all 25 regions with fixed anchors (`C3`, `C1`, `C5`),
+seeded Noble/Royal ownership, King-held capital plus a non-adjacent coastal
+food-tax region, 0-3 settlements per region, race-split population stats,
+Mayor offices, town/city Guard Captains, a Crown Steward for royal demesne
+holdings, Noble stockpiles, and structured startup logs for generated
+settlement, geography, prejudice, and preference metadata.
+
+The engine-facing pass keeps to generic mechanics already proven by the
+prototype: `food_stores`, `soldiers`, `monster_pressure`, production drivers,
+consumption, upward food/coin taxes, forged reports, skimming, urgent reports,
+orders, reviews, and replacement. Geography schedules first-pass shocks:
+undeveloped monster nests, forest-border incidents, mine tunnel breaches,
+trade-port booms, a coastal granary fire, and a capital rumor wave.
+
+The addendum about undeveloped regions is encoded directly: King regions,
+`C1`, and `C5` never start undeveloped; every other region has a nonzero
+undeveloped chance, and `undeveloped_probability()` increases monotonically
+with the owning Noble's holding count. `just run` / `just map` now support
+`isekai_kingdom` and seed-aware map replay.
+
+Validated with `just check` plus a six-seed, 220-tick balance pass. The sample
+kept holdings mostly within a one-region spread, produced 3-6 undeveloped
+regions in most seeds, and consistently emitted shocks, tax transfers,
+forgery, skimming, and defense. `tests/test_isekai_kingdom.py` locks the core
+generation constraints, run event mix, tax flow, shocks, forgery/skimming
+presence, and seeded map reconstruction.
 
 ### 2026-06-03 — Isekai kingdom grid scenario sketch (GPT-5 via Codex)
 
@@ -1293,6 +1327,7 @@ src/infosim/
     frontier.py       # wide frontier scenario (1/2/3 commanders) + CLI
     deep_chain.py     # 4-level scenario validating arbitrary depth
     space_miner.py    # CEO/Manager/Captain economy with mobile Commanders
+    isekai_kingdom.py # generated 5x5 fantasy kingdom grid
 tools/
   inspect_run.py      # filter a JSONL run by actor / location / kind / subject / time range
   sweep.py            # multi-seed aggregation
