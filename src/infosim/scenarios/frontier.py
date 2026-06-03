@@ -408,12 +408,15 @@ def run(seed: int, ticks: int, runs_dir: Path) -> Path:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument("--seed", type=int, default=None,
+                        help="random each run unless given; pass to reproduce a run")
     parser.add_argument("--ticks", type=int, default=200,
                         help="logical time units to advance")
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
     args = parser.parse_args()
-    out = run(args.seed, args.ticks, args.runs_dir)
+    seed = args.seed if args.seed is not None else random.randrange(1_000_000)
+    out = run(seed, args.ticks, args.runs_dir)
+    print(f"seed={seed}")
     print(f"Wrote {out}.jsonl and {out}.log")
 
 

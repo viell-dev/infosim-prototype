@@ -263,6 +263,28 @@ they can be answered.
 
 Append-only. Add notes as the design evolves.
 
+### 2026-06-03 — Random-default seeds; seed-robust space_miner tests (Claude Opus 4.8 via Claude Code)
+
+Followup to the run-diff review. Two changes so we stop implicitly validating a
+single lucky seed:
+
+- **Scenarios now seed randomly by default.** `frontier` / `space_miner` /
+  `deep_chain` `main()` pick `random.randrange(1_000_000)` unless `--seed` is
+  given, and print `seed=<n>` (the run filename also encodes it) so any run is
+  reproducible with `--seed`. Exact cross-version reproduction is explicitly
+  *not* a goal — "kind of the same" is the bar — but same-seed determinism is
+  retained (and `test_determinism` guards it) precisely so `--seed` is useful.
+- **`test_space_miner` no longer pins a working seed.** The capability test ran
+  one cherry-picked seed (seed 2, chosen because the t=190 recall happened to
+  land). It now runs seeds 1–5 and asserts the always-present mechanics
+  (mining / consumption / alien_contact / defense / tax / orion mobility) in
+  *every* seed, and that the courier-dependent recall lands in *most* (≥3/5).
+  The map test now asserts the replay agrees with the log's last orion
+  reassignment — whatever it is — so it validates the tool, not a seed's luck.
+
+Validation: `python3 tests/_runner.py` → 37/37. Repeated `frontier` runs print
+different seeds; `--seed N` reproduces.
+
 ### 2026-06-03 — Before/after run diff: exact cleanup footprint (Claude Opus 4.8 via Claude Code)
 
 Sanity check on whether the ruleset cleanup quietly changed behavior the
