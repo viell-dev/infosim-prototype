@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from ..sim import Simulation
 
 
-def _maybe_skim(sim: "Simulation", actor: "Actor") -> None:
+def _maybe_skim(sim: "Simulation", actor: "Actor", traits=None) -> None:
     """A disloyal, ambitious actor quietly extracts food from their own stats.
 
     Stochastic: probability per decide cycle is ``ambition * (1 - loyalty)^2``.
@@ -22,10 +22,14 @@ def _maybe_skim(sim: "Simulation", actor: "Actor") -> None:
     disloyal the actor is. The actor's stats drop; their belief is NOT updated
     to match — the next observation surfaces the loss honestly, but if they
     forge their reports it never leaves them.
+
+    ``traits`` defaults to the actor's own; for a vacant office governed by a
+    regent it is the regent's traits (an honest regent never skims the seat).
     """
-    if actor.traits.loyalty >= SKIM_LOYALTY_THRESHOLD:
+    traits = traits if traits is not None else actor.traits
+    if traits.loyalty >= SKIM_LOYALTY_THRESHOLD:
         return
-    if actor.traits.ambition < SKIM_AMBITION_THRESHOLD:
+    if traits.ambition < SKIM_AMBITION_THRESHOLD:
         return
     available = actor.stats.get(sim.supply_stat, 0.0)
     if available <= 0:
@@ -35,8 +39,8 @@ def _maybe_skim(sim: "Simulation", actor: "Actor") -> None:
     # mildly loyal still very rare, deeply disloyal frequent. Hard gates at
     # SKIM_LOYALTY_THRESHOLD and SKIM_AMBITION_THRESHOLD keep the very
     # virtuous immune so unit tests stay deterministic.
-    disloyalty = 1.0 - actor.traits.loyalty
-    p = actor.traits.ambition * disloyalty * disloyalty
+    disloyalty = 1.0 - traits.loyalty
+    p = traits.ambition * disloyalty * disloyalty
     if sim.rng.random() >= p:
         return
 

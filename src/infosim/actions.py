@@ -198,15 +198,19 @@ def send_supplies(
     )
 
 
-def defend_location(sim: "Simulation", actor: "Actor") -> None:
+def defend_location(sim: "Simulation", actor: "Actor", competence: float | None = None) -> None:
     """Spend this actor's defense stat to reduce the worst threat at their
     current location. Genre-agnostic: defense_stat vs threat_stat from the
     ruleset (garrison vs unrest, ships vs alien_presence, …).
+
+    ``competence`` defaults to the actor's own; for a vacant office it is the
+    governing regent's (the regent directs the defense remotely).
     """
     threat_stat = sim.threat_stat
     defense_stat = sim.defense_stat
     if threat_stat is None or defense_stat is None:
         return
+    competence = competence if competence is not None else actor.traits.competence
     holders = [a for a in sim.actors.values() if a.location == actor.location]
     targets = [a for a in holders if a.stats.get(threat_stat, 0.0) > 0]
     if not targets:
@@ -214,7 +218,7 @@ def defend_location(sim: "Simulation", actor: "Actor") -> None:
     target = max(targets, key=lambda a: a.stats.get(threat_stat, 0.0))
     before = target.stats.get(threat_stat, 0.0)
     defense = actor.stats.get(defense_stat, 0.0)
-    reduction = min(before, defense * (4.0 + 8.0 * actor.traits.competence))
+    reduction = min(before, defense * (4.0 + 8.0 * competence))
     if reduction <= 0:
         return
     target.stats[threat_stat] = before - reduction

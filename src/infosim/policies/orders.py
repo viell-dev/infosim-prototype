@@ -71,7 +71,9 @@ def _dispatch_order(
     )
 
 
-def _handle_middle_order(sim: "Simulation", actor: "Actor", order: "Order") -> None:
+def _handle_middle_order(
+    sim: "Simulation", actor: "Actor", order: "Order", issuer: "Actor | None" = None,
+) -> None:
     """Generic order handling at any middle rung.
 
     Targets self  -> execute locally.
@@ -82,18 +84,25 @@ def _handle_middle_order(sim: "Simulation", actor: "Actor", order: "Order") -> N
         there). This is how arbitrary depth works without the engine knowing
         about it.
     Targets an unreachable actor -> drop with a log entry.
+
+    ``issuer`` is the actor physically acting on the order — normally ``actor``,
+    but for a vacant office it is the governing regent, so re-dispatched command
+    couriers originate from the regent's seat (real, longer delay) and remote
+    decisions use the regent's competence. Physical resource transfers still
+    leave the office (``actor``), which holds the goods.
     """
+    issuer = issuer if issuer is not None else actor
     if order.target_actor == actor.id:
         if order.kind is OrderKind.SUPPRESS_UNREST:
             suppress_unrest(
                 sim, actor.id, target_actor_id=actor.id,
                 duration=SUPPRESS_DURATION,
-                competence=actor.traits.competence, rng=sim.rng,
+                competence=issuer.traits.competence, rng=sim.rng,
             )
         elif order.kind is OrderKind.MOVE_TO_LOCATION and order.target_location is not None:
             move_actor(sim, actor.id, order.target_location, order.assigned_commander)
         elif order.kind is OrderKind.DEFEND_LOCATION:
-            defend_location(sim, actor)
+            defend_location(sim, actor, competence=issuer.traits.competence)
         # REINFORCE / SEND_SUPPLIES targeted at self are a no-op - the
         # actor would be transferring from themselves to themselves.
         return
@@ -115,13 +124,13 @@ def _handle_middle_order(sim: "Simulation", actor: "Actor", order: "Order") -> N
             )
         elif order.kind is OrderKind.SUPPRESS_UNREST:
             _dispatch_order(
-                sim, actor, direct_sub, OrderKind.SUPPRESS_UNREST,
+                sim, issuer, direct_sub, OrderKind.SUPPRESS_UNREST,
                 target_actor=direct_sub.id,
                 magnitude=order.magnitude, priority=order.priority,
             )
         elif order.kind in (OrderKind.MOVE_TO_LOCATION, OrderKind.DEFEND_LOCATION):
             _dispatch_order(
-                sim, actor, direct_sub, order.kind,
+                sim, issuer, direct_sub, order.kind,
                 target_actor=direct_sub.id,
                 magnitude=order.magnitude, priority=order.priority,
                 target_location=order.target_location,
@@ -140,7 +149,7 @@ def _handle_middle_order(sim: "Simulation", actor: "Actor", order: "Order") -> N
         )
         return
     _dispatch_order(
-        sim, actor, routed_via, order.kind,
+        sim, issuer, routed_via, order.kind,
         target_actor=order.target_actor,
         magnitude=order.magnitude, priority=order.priority,
         target_location=order.target_location,

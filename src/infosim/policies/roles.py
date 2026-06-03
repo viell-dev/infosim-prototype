@@ -23,17 +23,25 @@ if TYPE_CHECKING:
 # the data differs.
 
 
+# Behaviors take (sim, office, principal, role). For an occupied office
+# principal is the office itself; for a vacant office it is the governing regent
+# — so trait-driven decisions use the regent's competence/honesty and command
+# couriers the office issues originate from the regent's seat (real delay), while
+# the office still supplies the resources, subordinates, and location.
+
+
 # --- corruption ---------------------------------------------------------------
-def behavior_skim(sim: "Simulation", actor: "Actor", role: "RoleSpec") -> None:
-    _maybe_skim(sim, actor)
+def behavior_skim(sim: "Simulation", office: "Actor", principal: "Actor", role: "RoleSpec") -> None:
+    _maybe_skim(sim, office, principal.traits)
 
 
 # --- resource economy ---------------------------------------------------------
-def behavior_produce(sim: "Simulation", actor: "Actor", role: "RoleSpec") -> None:
+def behavior_produce(sim: "Simulation", office: "Actor", principal: "Actor", role: "RoleSpec") -> None:
     """Generate resources from a driver stat, scaled by competence."""
+    actor = office
     for spec in role.production:
         driver = actor.stats.get(spec.driver_stat, 0.0)
-        produced = max(0.0, driver * spec.rate * (spec.competence_curve + actor.traits.competence))
+        produced = max(0.0, driver * spec.rate * (spec.competence_curve + principal.traits.competence))
         if produced <= 0:
             continue
         before = actor.stats.get(spec.output_stat, 0.0)
@@ -53,8 +61,9 @@ def behavior_produce(sim: "Simulation", actor: "Actor", role: "RoleSpec") -> Non
         )
 
 
-def behavior_consume(sim: "Simulation", actor: "Actor", role: "RoleSpec") -> None:
+def behavior_consume(sim: "Simulation", office: "Actor", principal: "Actor", role: "RoleSpec") -> None:
     """Natural decay / usage of a resource each decide cycle."""
+    actor = office
     for spec in role.decay:
         before = actor.stats.get(spec.stat, 0.0)
         if spec.driver_stat is not None:
@@ -85,8 +94,9 @@ def behavior_consume(sim: "Simulation", actor: "Actor", role: "RoleSpec") -> Non
         )
 
 
-def behavior_tax(sim: "Simulation", actor: "Actor", role: "RoleSpec") -> None:
+def behavior_tax(sim: "Simulation", office: "Actor", principal: "Actor", role: "RoleSpec") -> None:
     """Transfer a fraction of a resource upward to the commander."""
+    actor = office
     if actor.commander is None:
         return
     superior = sim.actors.get(actor.commander)
@@ -104,11 +114,13 @@ def behavior_tax(sim: "Simulation", actor: "Actor", role: "RoleSpec") -> None:
 
 
 # --- order execution ----------------------------------------------------------
-def behavior_execute_orders(sim: "Simulation", actor: "Actor", role: "RoleSpec") -> None:
+def behavior_execute_orders(sim: "Simulation", office: "Actor", principal: "Actor", role: "RoleSpec") -> None:
     """Drain the inbox; each order is dispatched through the generic
     middle-rung handler, which executes locally, transfers to a direct sub, or
-    forwards deeper as appropriate (depth-agnostic).
+    forwards deeper as appropriate (depth-agnostic). Forwarded couriers are
+    issued by ``principal`` so a regent's relays leave from its own seat.
     """
+    actor = office
     while actor.inbox:
         order = actor.inbox.pop(0)
         sim.event_log.emit(
@@ -121,11 +133,11 @@ def behavior_execute_orders(sim: "Simulation", actor: "Actor", role: "RoleSpec")
             order_kind=order.kind.value,
             target_actor=order.target_actor,
         )
-        _handle_middle_order(sim, actor, order)
+        _handle_middle_order(sim, actor, order, issuer=principal)
 
 
-# --- apex command -------------------------------------------------------------
-def behavior_issue_orders(sim: "Simulation", actor: "Actor", role: "RoleSpec") -> None:
+# --- apex command (apex offices are never vacant, so principal == office) -----
+def behavior_issue_orders(sim: "Simulation", office: "Actor", principal: "Actor", role: "RoleSpec") -> None:
     """Apex policy: for each subordinate (and one level deeper) issue
     reinforcement / suppression / supply orders against belief, then review.
 
@@ -135,6 +147,7 @@ def behavior_issue_orders(sim: "Simulation", actor: "Actor", role: "RoleSpec") -
       - An actor one level deeper — full menu, routed through the intermediate
         subordinate whose stats act as the source.
     """
+    actor = office
     low_defense = role.thresholds.get("low_defense")
     low_supply = role.thresholds.get("low_supply")
     high_threat = role.thresholds.get("high_threat")
@@ -188,11 +201,12 @@ def _maybe_send_supplies(
                     magnitude=magnitude, priority=1)
 
 
-def behavior_apex_defense_orders(sim: "Simulation", actor: "Actor", role: "RoleSpec") -> None:
+def behavior_apex_defense_orders(sim: "Simulation", office: "Actor", principal: "Actor", role: "RoleSpec") -> None:
     """Apex/regional defense ordering: order any Commander whose believed local
     threat is high to defend their post (routed through the intermediate sub
     when the Commander is not a direct report).
     """
+    actor = office
     high_threat = role.thresholds.get("high_threat")
     if high_threat is None or sim.threat_stat is None:
         return
@@ -211,8 +225,9 @@ def behavior_apex_defense_orders(sim: "Simulation", actor: "Actor", role: "RoleS
 
 
 # --- middle autonomy ----------------------------------------------------------
-def behavior_autonomous_suppress(sim: "Simulation", actor: "Actor", role: "RoleSpec") -> None:
+def behavior_autonomous_suppress(sim: "Simulation", office: "Actor", principal: "Actor", role: "RoleSpec") -> None:
     """Act alone to suppress unrest when local threat belief is severe."""
+    actor = office
     threshold = role.thresholds.get("autonomous_threat")
     if threshold is None or sim.threat_stat is None:
         return
@@ -229,14 +244,16 @@ def behavior_autonomous_suppress(sim: "Simulation", actor: "Actor", role: "RoleS
         suppress_unrest(
             sim, actor.id, target_actor_id=actor.id,
             duration=SUPPRESS_DURATION,
-            competence=actor.traits.competence, rng=sim.rng,
+            competence=principal.traits.competence, rng=sim.rng,
         )
 
 
-def behavior_local_defense_orders(sim: "Simulation", actor: "Actor", role: "RoleSpec") -> None:
+def behavior_local_defense_orders(sim: "Simulation", office: "Actor", principal: "Actor", role: "RoleSpec") -> None:
     """Order the strongest local Commander to defend (or move in to) this post
-    when own true threat is high.
+    when own true threat is high. Orders are issued by ``principal`` (the regent
+    for a vacant office) but still assign the Commander to this office.
     """
+    actor = office
     threshold = role.thresholds.get("autonomous_threat")
     if threshold is None or sim.threat_stat is None or sim.defense_stat is None:
         return
@@ -252,30 +269,35 @@ def behavior_local_defense_orders(sim: "Simulation", actor: "Actor", role: "Role
     defender = max(defenders, key=lambda a: a.stats.get(sim.defense_stat, 0.0))
     if defender.location != actor.location:
         _dispatch_order(
-            sim, actor, defender, OrderKind.MOVE_TO_LOCATION, defender.id,
+            sim, principal, defender, OrderKind.MOVE_TO_LOCATION, defender.id,
             magnitude=0.0, priority=3, target_location=actor.location,
             assigned_commander=actor.id,
         )
         return
     _dispatch_order(
-        sim, actor, defender, OrderKind.DEFEND_LOCATION, defender.id,
+        sim, principal, defender, OrderKind.DEFEND_LOCATION, defender.id,
         magnitude=threat, priority=3,
     )
 
 
 # --- leaf behaviors -----------------------------------------------------------
-def behavior_defend(sim: "Simulation", actor: "Actor", role: "RoleSpec") -> None:
+def behavior_defend(sim: "Simulation", office: "Actor", principal: "Actor", role: "RoleSpec") -> None:
     """Spend defense on local threat when both are present."""
+    actor = office
     if sim.threat_stat is None or sim.defense_stat is None:
         return
     if actor.stats.get(sim.threat_stat, 0.0) > 0 and actor.stats.get(sim.defense_stat, 0.0) > 0:
-        defend_location(sim, actor)
+        defend_location(sim, actor, competence=principal.traits.competence)
 
 
-def behavior_urgent_reports(sim: "Simulation", actor: "Actor", role: "RoleSpec") -> None:
+def behavior_urgent_reports(sim: "Simulation", office: "Actor", principal: "Actor", role: "RoleSpec") -> None:
     """Jump cadence with an urgent report when own supply/defense belief is
-    critically low.
+    critically low. A vacant office skips this: its regent already governs it
+    directly and hears it through the caretaker's ordinary reports.
     """
+    actor = office
+    if actor.vacant:
+        return
     if actor.commander is None:
         return
     superior = sim.actors.get(actor.commander)
@@ -358,19 +380,37 @@ BEHAVIORS = {
 }
 
 
-def run_policy(sim: "Simulation", actor: "Actor") -> None:
-    # A vacant office makes no decisions of its own; step 2 has its regent act
-    # for it remotely. It still observes/reports as a caretaker (handled by the
-    # OBSERVE/REPORT cadences in sim, not here).
-    if actor.vacant:
-        return
-    # All actors handle their request inbox first - replies are short-cycle and
-    # independent of role-specific decisions.
-    _process_request_inbox(sim, actor)
-    role = sim.ruleset.roles.get(actor.title)
+def _acting_principal(sim: "Simulation", office: "Actor") -> "Actor | None":
+    """The person who actually acts for an office: its own occupant, or — if the
+    seat is vacant — the nearest occupied office up the regent chain.
+    """
+    current = office
+    seen: set[str] = set()
+    while current.vacant and current.regent and current.id not in seen:
+        seen.add(current.id)
+        nxt = sim.actors.get(current.regent)
+        if nxt is None:
+            return None
+        current = nxt
+    return None if current.vacant else current
+
+
+def run_policy(sim: "Simulation", office: "Actor") -> None:
+    # The principal is the office's occupant, or for a vacant seat the regent who
+    # governs it remotely (command couriers will leave from the regent's seat).
+    if office.vacant:
+        principal = _acting_principal(sim, office)
+        if principal is None:
+            return  # no one available to govern (should not happen below the apex)
+    else:
+        principal = office
+    # The seat answers its own info-requests (a vacant seat's honest caretaker
+    # responds from what it locally knows).
+    _process_request_inbox(sim, office)
+    role = sim.ruleset.roles.get(office.title)
     if role is None:
         return
     for name in role.behaviors:
         behavior = BEHAVIORS.get(name)
         if behavior is not None:
-            behavior(sim, actor, role)
+            behavior(sim, office, principal, role)
