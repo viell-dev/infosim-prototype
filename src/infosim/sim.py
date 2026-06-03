@@ -264,7 +264,7 @@ class Simulation:
                     self.event_log.emit(
                         self.now,
                         "report_forged",
-                        f"[{actor.region}] {actor.title} {actor.display_name} forges "
+                        f"[{actor.location}] {actor.title} {actor.display_name} forges "
                         f"{subject}: true belief {belief.value:.0f} → "
                         f"reported {outgoing_value:.0f} (loyalty {actor.traits.loyalty:.2f})",
                         actor=actor.id,
@@ -283,8 +283,8 @@ class Simulation:
             msg = self.bus.dispatch(
                 sender_actor=actor.id,
                 recipient_actor=recipient.id,
-                origin_region=actor.region,
-                destination_region=recipient.region,
+                origin_region=actor.location,
+                destination_region=recipient.location,
                 base_travel_ticks=travel,
                 dispatch_time=self.now,
                 payload=report,
@@ -292,8 +292,8 @@ class Simulation:
             self.event_log.emit(
                 self.now,
                 "dispatch",
-                f"[{actor.region}] {actor.title} {actor.display_name} dispatches "
-                f"courier #{msg.id} → {recipient.region} "
+                f"[{actor.location}] {actor.title} {actor.display_name} dispatches "
+                f"courier #{msg.id} → {recipient.location} "
                 f"(eta t={msg.eta_time:.0f}, subject={subject}, "
                 f"value≈{report.estimated_value:.0f})",
                 message_id=msg.id,
@@ -344,7 +344,7 @@ class Simulation:
             self.event_log.emit(
                 self.now,
                 "receive",
-                f"[{recipient.region}] {recipient.title} {recipient.display_name} receives "
+                f"[{recipient.location}] {recipient.title} {recipient.display_name} receives "
                 f"courier #{msg.id} from {msg.sender_actor}: "
                 f"{transformed.subject} ≈ {transformed.estimated_value:.0f} "
                 f"(conf {transformed.confidence:.2f}, "

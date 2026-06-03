@@ -31,19 +31,9 @@ class World:
     locations: dict[str, Location] = field(default_factory=dict)
     edges: dict[str, dict[str, int]] = field(default_factory=dict)
 
-    # Back-compat alias so existing call sites that say `world.regions[name]`
-    # keep working. The object stored is still a Location.
-    @property
-    def regions(self) -> dict[str, Location]:
-        return self.locations
-
     def add_location(self, location: Location) -> None:
         self.locations[location.name] = location
         self.edges.setdefault(location.name, {})
-
-    # Back-compat alias.
-    def add_region(self, region: Location) -> None:
-        self.add_location(region)
 
     def connect(self, a: str, b: str, travel_ticks: int) -> None:
         self.edges[a][b] = travel_ticks
@@ -53,8 +43,3 @@ class World:
         if a == b:
             return 0
         return self.edges[a][b]
-
-
-# Back-compat alias: existing code uses `Region(name=...)`. State is now ignored.
-def Region(name: str, state: dict[str, float] | None = None) -> Location:  # noqa: N802
-    return Location(name=name)

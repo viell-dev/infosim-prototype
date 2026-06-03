@@ -38,7 +38,7 @@ class Actor:
     """
     id: str
     display_name: str
-    title: str                  # used by policy dispatch (POLICY_BY_TITLE)
+    title: str                  # keys the RoleSpec in the active ruleset
     location: str               # node name in the World travel topology
     commander: str | None       # actor id of the superior, or None for the apex
     traits: Traits = field(default_factory=Traits)
@@ -64,25 +64,6 @@ class Actor:
     pending_requests: dict[int, "PendingRequest"] = field(default_factory=dict)
     tenure_start_time: float = 0.0
     strikes: dict[str, int] = field(default_factory=dict)
-
-    # --- back-compat properties --------------------------------------------
-    # Existing call sites use ``actor.region`` and ``actor.reports_to``.
-    # Map them to the new field names so the rename can land incrementally.
-    @property
-    def region(self) -> str:
-        return self.location
-
-    @region.setter
-    def region(self, value: str) -> None:
-        self.location = value
-
-    @property
-    def reports_to(self) -> str | None:
-        return self.commander
-
-    @reports_to.setter
-    def reports_to(self, value: str | None) -> None:
-        self.commander = value
 
     def update_belief(
         self,
