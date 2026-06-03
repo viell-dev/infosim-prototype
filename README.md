@@ -263,6 +263,35 @@ they can be answered.
 
 Append-only. Add notes as the design evolves.
 
+### 2026-06-03 — Before/after run diff: exact cleanup footprint (Claude Opus 4.8 via Claude Code)
+
+Sanity check on whether the ruleset cleanup quietly changed behavior the
+(qualitative) tests would miss. Generated matched runs from the pre-cleanup
+commit (`a3b6eda`, via a throwaway worktree) and current `main`, then diffed
+the JSONL event by event.
+
+- **Frontier (seed 7, 200t): behavior-identical.** All 3512 events match; the
+  only difference is the additive `"stat": "unrest"` field now on `defense`
+  events. No value, ordering, or RNG change. So the medieval path is preserved
+  across versions, not merely same-code reproducible.
+- **Space_miner (seed 2): three differences, isolated by reverting them.**
+  Reverting the two intended-ish changes made the new code byte-identical to the
+  old (6568 events, zero non-additive divergence). The complete footprint is:
+  (1) additive `stat`/`driver_stat` keys; (2) `behavior_consume` now skips
+  zero-amount `consumption` events (`if consumed <= 0: continue`) — the old
+  `_consume_ore` logged them; this is log-only (consuming 0 changes no state and
+  draws no RNG) and was an *unintended* side effect of the rewrite, kept because
+  it only removes noise; (3) the documented info-request forgery threshold swap
+  (literal 1000/20 → per-stat `bad_news_thresholds`), which shifts the RNG
+  stream and accounts for the bulk of the divergence.
+
+Test-completeness read: the suite is qualitative (event-kind presence,
+capability checks, one seeded narrative). It did **not** catch difference (2) and
+caught (3) only incidentally (it broke seed 1's recall-courier outcome). Per the
+project's "close enough is fine" stance for stochastic runs, no exact-value
+golden regression was added; this note records the precise footprint instead so
+the divergence is reconstructable.
+
 ### 2026-06-03 — Scenario-owned rulesets: resources & roles as data (Claude Opus 4.8 via Claude Code)
 
 Cleanup pass before M4, resolving the "generic-genre claim is aspirational"
