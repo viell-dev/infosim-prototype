@@ -38,3 +38,29 @@ def test_used_candidates_skipped() -> None:
 
 def test_empty_pool_returns_none() -> None:
     assert pick_replacement([], used_ids=set(), king_traits=Traits()) is None
+
+
+def test_prejudice_affects_candidate_choice() -> None:
+    candidates = [
+        Candidate(
+            id="disliked",
+            display_name="D",
+            traits=Traits(competence=0.75, honesty=0.75, loyalty=0.75),
+            identity="elf",
+        ),
+        Candidate(
+            id="liked",
+            display_name="L",
+            traits=Traits(competence=0.70, honesty=0.70, loyalty=0.70),
+            identity="dwarf",
+        ),
+    ]
+    pick = pick_replacement(
+        candidates,
+        used_ids=set(),
+        king_traits=Traits(education=0.5, honesty=0.5, fear=0.5),
+        chooser_prejudice={"elf": 0.9},
+        chooser_preference={"dwarf": 0.4},
+    )
+    assert pick is not None
+    assert pick.id == "liked"

@@ -317,7 +317,14 @@ class Simulation:
             return
 
         if msg.kind is MessageKind.REPORT:
-            transformed = relay(recipient, msg.payload, self.rng, self.ruleset.stats)
+            sender = self.actors.get(msg.sender_actor)
+            transformed = relay(
+                recipient,
+                msg.payload,
+                self.rng,
+                self.ruleset.stats,
+                source_identity=sender.identity if sender is not None else None,
+            )
             recipient.update_belief(
                 transformed.subject,
                 transformed.estimated_value,

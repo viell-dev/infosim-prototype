@@ -15,6 +15,9 @@ class Candidate:
     id: str
     display_name: str
     traits: Traits
+    identity: str | None = None
+    prejudice: dict[str, float] | None = None
+    preference: dict[str, float] | None = None
 
 
 # An empty seat is minded by an honest caretaker staff: truthful (no forgery at
@@ -60,6 +63,9 @@ def install_occupant(
     office.display_name = candidate.display_name
     office.title = office.title  # unchanged; the seat defines the role
     office.traits = candidate.traits
+    office.identity = candidate.identity
+    office.prejudice = dict(candidate.prejudice or {})
+    office.preference = dict(candidate.preference or {})
     office.occupant_id = candidate.id
     office.vacant = False
     office.regent = None
@@ -81,6 +87,9 @@ def install_occupant(
         competence=candidate.traits.competence,
         honesty=candidate.traits.honesty,
         loyalty=candidate.traits.loyalty,
+        identity=candidate.identity,
+        prejudice=dict(candidate.prejudice or {}),
+        preference=dict(candidate.preference or {}),
         stats=dict(office.stats),
     )
     return office
@@ -96,6 +105,9 @@ def vacate(sim: "Simulation", office: Actor, superior: Actor, reason: str) -> Ac
 
     office.display_name = f"(vacant {office.title})"
     office.traits = CARETAKER_TRAITS
+    office.identity = None
+    office.prejudice = {}
+    office.preference = {}
     office.occupant_id = None
     office.vacant = True
     office.regent = superior.id
@@ -138,6 +150,9 @@ def pick_replacement(
     pool: list[Candidate],
     used_ids: set[str],
     king_traits: Traits,
+    chooser_identity: str | None = None,
+    chooser_prejudice: dict[str, float] | None = None,
+    chooser_preference: dict[str, float] | None = None,
 ) -> Candidate | None:
     """Choose a candidate from the pool, biased by the chooser's trait profile.
 
@@ -154,10 +169,18 @@ def pick_replacement(
         w_comp = 0.1 + 1.5 * king_traits.education
         w_loy = 0.1 + 1.5 * king_traits.fear
         w_hon = 0.1 + 1.0 * king_traits.honesty
+        prejudice = chooser_prejudice or {}
+        preference = chooser_preference or {}
+        affinity = 0.0
+        if c.identity is not None:
+            affinity = preference.get(c.identity, 0.0) - prejudice.get(c.identity, 0.0)
+        in_group = 0.05 if c.identity is not None and c.identity == chooser_identity else 0.0
         return (
             w_comp * c.traits.competence
             + w_loy * c.traits.loyalty
             + w_hon * c.traits.honesty
+            + 0.6 * affinity
+            + in_group
         )
 
     return max(available, key=score)

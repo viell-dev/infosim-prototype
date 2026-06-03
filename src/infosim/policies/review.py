@@ -162,7 +162,14 @@ def _dismiss_and_replace(sim: "Simulation", king: "Actor", sub: "Actor") -> None
     is not punished for the predecessor.
     """
     reason = f"{KING_STRIKES_TO_DISMISS} consecutive bad reviews"
-    candidate = pick_replacement(sim.candidate_pool, sim.used_candidates, king.traits)
+    candidate = pick_replacement(
+        sim.candidate_pool,
+        sim.used_candidates,
+        king.traits,
+        chooser_identity=king.identity,
+        chooser_prejudice=king.prejudice,
+        chooser_preference=king.preference,
+    )
     if candidate is None:
         # Already empty and no one to install — nothing to do (don't re-emit a
         # regency for a seat that's already vacant).

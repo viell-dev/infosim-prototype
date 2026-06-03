@@ -74,6 +74,7 @@ def test_kingdom_run_emits_setup_economy_politics_and_shocks(tmp_path) -> None:
 
     assert {
         "scenario_setup",
+        "actor_identity_setup",
         "noble_setup",
         "region_setup",
         "observation",

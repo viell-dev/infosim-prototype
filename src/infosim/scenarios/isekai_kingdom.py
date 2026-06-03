@@ -244,36 +244,54 @@ def candidate_pool() -> list[Candidate]:
             display_name="Maris Aven",
             traits=Traits(competence=0.78, honesty=0.86, loyalty=0.82, ambition=0.35,
                           fear=0.22, education=0.72),
+            identity="human",
+            prejudice={"demon": 0.20},
+            preference={"dwarf": 0.15},
         ),
         Candidate(
             id="cand_osric",
             display_name="Osric Bell",
             traits=Traits(competence=0.66, honesty=0.72, loyalty=0.92, ambition=0.25,
                           fear=0.36, education=0.58),
+            identity="beast-man",
+            prejudice={"demon": 0.10},
+            preference={"human": 0.15},
         ),
         Candidate(
             id="cand_senna",
             display_name="Senna Voss",
             traits=Traits(competence=0.90, honesty=0.62, loyalty=0.58, ambition=0.70,
                           fear=0.18, education=0.88),
+            identity="demon",
+            prejudice={"orc": 0.18},
+            preference={"human": 0.12},
         ),
         Candidate(
             id="cand_iora",
             display_name="Iora Dusk",
             traits=Traits(competence=0.70, honesty=0.80, loyalty=0.74, ambition=0.42,
                           fear=0.28, education=0.76),
+            identity="elf",
+            prejudice={"dwarf": 0.10},
+            preference={"beast-man": 0.18},
         ),
         Candidate(
             id="cand_garron",
             display_name="Garron Pike",
             traits=Traits(competence=0.58, honesty=0.88, loyalty=0.96, ambition=0.18,
                           fear=0.50, education=0.46),
+            identity="dwarf",
+            prejudice={"elf": 0.16},
+            preference={"dwarf": 0.10},
         ),
         Candidate(
             id="cand_velia",
             display_name="Velia Thorn",
             traits=Traits(competence=0.82, honesty=0.58, loyalty=0.48, ambition=0.76,
                           fear=0.24, education=0.80),
+            identity="orc",
+            prejudice={"demon": 0.12},
+            preference={"orc": 0.15},
         ),
     ]
 
@@ -438,6 +456,9 @@ def _build_actors(
 
     king_regions = [r for r in regions.values() if r.owner_id == "king"]
     king_population = sum(r.stats["population"] for r in king_regions)
+    king_identity = rng.choice(RACES)
+    king_prejudice = _affinity_map(rng.sample([r for r in RACES if r != king_identity], k=rng.randint(0, 1)))
+    king_preference = _affinity_map(rng.sample([r for r in RACES if r not in king_prejudice], k=rng.randint(0, 1)))
     add(Actor(
         id="king",
         display_name="Aster Halric",
@@ -446,6 +467,9 @@ def _build_actors(
         commander=None,
         traits=Traits(competence=0.78, honesty=0.84, loyalty=0.92, ambition=0.38,
                       fear=0.18, education=0.88),
+        identity=king_identity,
+        prejudice=king_prejudice,
+        preference=king_preference,
         stats={
             "food_stores": 5000.0 + sum(r.stats["food_stores"] * 0.25 for r in king_regions),
             "soldiers": 1300.0,
@@ -475,6 +499,9 @@ def _build_actors(
             location=noble.seat,
             commander="king",
             traits=noble.traits,
+            identity=noble.race,
+            prejudice=_affinity_map(noble.prejudice),
+            preference=_affinity_map(noble.preference),
             stats={
                 "food_stores": 800.0 + sum(s["food_stores"] * 0.10 for s in holding_stats),
                 "soldiers": 120.0 + 55.0 * len(noble.holdings) + rng.uniform(0, 160),
@@ -496,6 +523,8 @@ def _build_actors(
 
     for region in regions.values():
         mayor_id = _mayor_id(region.coord)
+        mayor_identity = _dominant_race(rng, region.race_pops)
+        mayor_prejudice, mayor_preference = _local_affinity_maps(rng, mayor_identity, region)
         add(Actor(
             id=mayor_id,
             display_name=_mayor_name(rng, region.coord, region.developed),
@@ -503,6 +532,9 @@ def _build_actors(
             location=region.coord,
             commander=region.owner_id,
             traits=_mayor_traits(rng, region),
+            identity=mayor_identity,
+            prejudice=mayor_prejudice,
+            preference=mayor_preference,
             stats=dict(region.stats),
             report_every=9,
             observe_every=5,
@@ -510,6 +542,8 @@ def _build_actors(
         ))
         guard_strength = _guard_strength(region)
         if guard_strength > 0:
+            guard_identity = _dominant_race(rng, region.race_pops)
+            guard_prejudice, guard_preference = _local_affinity_maps(rng, guard_identity, region)
             add(Actor(
                 id=_guard_id(region.coord),
                 display_name=f"Guard Captain {_surname(rng)}",
@@ -517,6 +551,9 @@ def _build_actors(
                 location=region.coord,
                 commander=mayor_id,
                 traits=_guard_traits(rng, region),
+                identity=guard_identity,
+                prejudice=guard_prejudice,
+                preference=guard_preference,
                 stats={
                     "food_stores": max(120.0, guard_strength * rng.uniform(1.5, 2.8)),
                     "soldiers": guard_strength,
@@ -727,6 +764,19 @@ def _emit_setup(log: EventLog, setup: KingdomSetup) -> None:
             prejudice=list(noble.prejudice),
             preference=list(noble.preference),
         )
+    for actor in sorted(setup.actors.values(), key=lambda a: a.id):
+        log.emit(
+            0.0,
+            "actor_identity_setup",
+            f"{actor.title} {actor.display_name} identity={actor.identity or 'none'} "
+            f"prejudice={sorted(actor.prejudice)} preference={sorted(actor.preference)}",
+            actor=actor.id,
+            title=actor.title,
+            display_name=actor.display_name,
+            identity=actor.identity,
+            prejudice=dict(actor.prejudice),
+            preference=dict(actor.preference),
+        )
     for region in sorted(setup.regions.values(), key=lambda r: r.coord):
         settlement_bits = [
             {
@@ -900,6 +950,44 @@ def _bump(sim: Simulation, actor_id: str, stat: str, delta: float, cause: str) -
         after=after,
         cause=cause,
     )
+
+
+def _affinity_map(identities: tuple[str, ...] | list[str]) -> dict[str, float]:
+    return {identity: 0.20 for identity in identities}
+
+
+def _dominant_race(rng: random.Random, race_pops: dict[str, int]) -> str:
+    total = sum(race_pops.values())
+    if total <= 0:
+        return rng.choice(RACES)
+    mark = rng.randrange(total)
+    acc = 0
+    for race in RACES:
+        acc += race_pops.get(race, 0)
+        if mark < acc:
+            return race
+    return RACES[-1]
+
+
+def _local_affinity_maps(
+    rng: random.Random,
+    identity: str,
+    region: RegionProfile,
+) -> tuple[dict[str, float], dict[str, float]]:
+    prejudice_pool = [race for race in RACES if race != identity]
+    prejudice: dict[str, float] = {}
+    preference: dict[str, float] = {}
+    if rng.random() < 0.55:
+        target = rng.choice(prejudice_pool)
+        prejudice[target] = rng.uniform(0.10, 0.35)
+    if rng.random() < 0.45:
+        likely = [
+            race for race, pops in region.race_pops.items()
+            if race != identity and pops > 0 and race not in prejudice
+        ]
+        target = rng.choice(likely or [race for race in RACES if race not in prejudice])
+        preference[target] = rng.uniform(0.10, 0.28)
+    return prejudice, preference
 
 
 def _noble_traits(rng: random.Random, royal: bool, holdings: int) -> Traits:

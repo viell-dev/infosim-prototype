@@ -70,13 +70,17 @@ def relay(
     incoming: Report,
     rng: random.Random,
     stats: Mapping[str, StatSpec],
+    source_identity: str | None = None,
 ) -> Report:
     """Apply this actor's transformation when forwarding a report upward."""
     val = incoming.estimated_value
     polarity = stats[_variable_of(incoming.subject)].polarity
+    affinity = actor.affinity_for(source_identity)
+    distrust = max(0.0, -affinity)
+    trust = max(0.0, affinity)
 
     # interpretation_bias: low education -> noisier numbers
-    interp_scale = (1.0 - actor.traits.education) * 0.05 * max(abs(val), 1.0)
+    interp_scale = (1.0 - actor.traits.education + 0.35 * distrust) * 0.05 * max(abs(val), 1.0)
     interpretation_bias = rng.gauss(0.0, interp_scale)
 
     # corruption_bias: low honesty -> shave value toward what a superior wants to hear,
@@ -88,7 +92,16 @@ def relay(
     fear_bias = polarity * actor.traits.fear * 0.10 * max(abs(val), 1.0)
 
     # transmission_loss: confidence degrades per hop, but education softens the loss.
-    new_confidence = max(0.05, incoming.confidence * (0.85 + 0.1 * actor.traits.education))
+    affinity_factor = 1.0 + 0.12 * trust - 0.20 * distrust
+    new_confidence = max(
+        0.05,
+        min(
+            1.0,
+            incoming.confidence
+            * (0.85 + 0.1 * actor.traits.education)
+            * affinity_factor,
+        ),
+    )
 
     new_value = val + interpretation_bias + corruption_bias + fear_bias
 

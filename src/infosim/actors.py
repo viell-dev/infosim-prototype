@@ -49,6 +49,13 @@ class Actor:
     location: str               # node name in the World travel topology
     commander: str | None       # parent office id, or None for the apex
     traits: Traits = field(default_factory=Traits)
+    # Optional scenario-owned occupant identity and personal affinities. A
+    # fantasy scenario can use race; a sci-fi one could use faction, species, or
+    # union membership. Values are 0..1 strengths and are intentionally
+    # asymmetric/person-specific.
+    identity: str | None = None
+    prejudice: dict[str, float] = field(default_factory=dict)
+    preference: dict[str, float] = field(default_factory=dict)
     # Vacancy: when no occupant holds the office, ``vacant`` is True and
     # ``regent`` is the office id of the superior who governs it remotely.
     vacant: bool = False
@@ -92,3 +99,12 @@ class Actor:
             last_updated_time=now,
             source_chain=source_chain,
         )
+
+    def affinity_for(self, identity: str | None) -> float:
+        """Positive preference minus prejudice toward an identity.
+
+        Generic range is roughly -1..+1. Scenarios decide what identities mean.
+        """
+        if identity is None:
+            return 0.0
+        return self.preference.get(identity, 0.0) - self.prejudice.get(identity, 0.0)

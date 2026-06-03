@@ -65,3 +65,18 @@ def test_relay_degrades_confidence() -> None:
     relayed = relay(forwarder, report, rng, STATS)
     assert relayed.confidence < report.confidence
     assert relayed.source_chain == ["a", "a"]
+
+
+def test_relay_confidence_reflects_source_affinity() -> None:
+    rng = random.Random(0)
+    upstream = _actor(competence=1.0, honesty=1.0, fear=0.0, education=1.0)
+    incoming = observe(upstream, "R.food_stores", 1000.0, rng)
+    trusting = _actor(competence=1.0, honesty=1.0, fear=0.0, education=1.0)
+    trusting.preference = {"dwarf": 0.8}
+    suspicious = _actor(competence=1.0, honesty=1.0, fear=0.0, education=1.0)
+    suspicious.prejudice = {"dwarf": 0.8}
+
+    trusted = relay(trusting, incoming, rng, STATS, source_identity="dwarf")
+    distrusted = relay(suspicious, incoming, rng, STATS, source_identity="dwarf")
+
+    assert trusted.confidence > distrusted.confidence
