@@ -56,6 +56,7 @@ def _maybe_skim(sim: "Simulation", actor: "Actor", traits=None) -> None:
         f"{sim.supply_stat} ({available:.0f} → {actor.stats[sim.supply_stat]:.0f})",
         actor=actor.id,
         location=actor.location,
+        stat=sim.supply_stat,
         amount=take,
         fraction=frac,
     )

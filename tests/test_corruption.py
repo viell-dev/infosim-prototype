@@ -39,6 +39,9 @@ def test_disloyal_ambitious_actor_skims(tmp_path: Path) -> None:
     for _ in range(50):
         _maybe_skim(sim, actor)
     assert actor.stats["food_stores"] < before
+    skim_events = [ev for ev in sim.event_log.events if ev["kind"] == "skim"]
+    assert skim_events
+    assert all(ev["stat"] == "food_stores" for ev in skim_events)
 
 
 def test_loyal_actor_does_not_skim(tmp_path: Path) -> None:

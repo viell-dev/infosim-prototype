@@ -6,12 +6,13 @@ separation produces interesting emergent narratives when read as logs. If readin
 like reading a believable little history of misinformation and delay, the concept is worth investing
 in. If not, it isn't.
 
-This repository currently implements **Milestones 1–3** of the blueprint: Information Sandbox,
-Hierarchical Decisions, and Political Pressure. Information flows up through delayed and
-biased reports; orders flow down through couriers; actions execute over time and feed
-consequences back into true state; disloyal actors forge reports and skim resources; the
-King reviews subordinates and replaces them from a candidate pool. No graphics yet — the
-human log is the product.
+This repository currently implements **Milestones 1–4** of the blueprint: Information Sandbox,
+Hierarchical Decisions, Political Pressure, and a minimal replay visualization. Information
+flows up through delayed and biased reports; orders flow down through couriers; actions
+execute over time and feed consequences back into true state; disloyal actors forge reports
+and skim resources; the King reviews subordinates and replaces them from a candidate pool.
+The human log remains the primary artifact, with a plain HTML replay browser for inspecting
+state and event flow.
 
 The simulation runs on a **discrete-event scheduler** (see `src/infosim/scheduler.py`),
 not a fixed tick loop. Each actor has its own cadences for observing, reporting, and
@@ -28,6 +29,7 @@ runtime when we want real parallelism (Python's GIL means we don't get it for fr
 - Single seeded `random.Random` threaded through the simulation for determinism.
 - Tests run via a small stdlib-only runner at `tests/_runner.py` (no pytest required).
 - Output: JSONL event stream + a human-readable `.log` per run, under `runs/`.
+  `just map` turns a JSONL run into a plain HTML replay browser.
 
 ### Why Python (and not Rust/Go)
 
@@ -111,9 +113,9 @@ JSONL path to map a specific run.
 - `src/infosim/scenarios/` wires concrete worlds, actors, and a `RULESET`;
   `tools/` contains
   analysis helpers. `tools/inspect_run.py` filters raw JSONL events, and
-  `tools/map_run.py` replays a run into a plain HTML debug map sampled at
-  start / 25% / 50% / 75% / end. `tests/` mirrors the purpose-specific
-  behavior under test.
+  `tools/map_run.py` replays a run into a plain HTML browser with event,
+  choice/change, and checkpoint navigation. `tests/` mirrors the
+  purpose-specific behavior under test.
 
 ---
 
@@ -265,6 +267,28 @@ they can be answered.
 ## Observations log
 
 Append-only. Add notes as the design evolves.
+
+### 2026-06-04 — M4 interactive replay visualization (GPT-5 via Codex)
+
+Expanded `tools/map_run.py` from five static checkpoint blocks into a generic
+HTML replay browser. The JSONL stream is replayed once into state frames, then
+the generated page lets the reader step by notable event time, by coarser
+choice/change time, or by start / 25% / 50% / 75% / end checkpoints. The state
+view keeps the existing hierarchy/stat table, now with an apex-known column so
+it works for both King and CEO scenarios, and the timeline pane summarizes what
+happened at the selected frame: reports, forgeries, orders, request/response
+traffic, reviews, actions, resource changes, office changes, and scenario-owned
+events through a generic fallback.
+
+While validating the replay, fixed skimming events to carry their affected
+`stat`; without that field the old map replay could not subtract skim losses
+from visualized state. The regression tests now cover frame construction,
+interactive controls, choice/change summaries, replacement lineage, vacant
+offices, mobile commanders, and skim event structure.
+
+Validation: `python3 tests/_runner.py` passed all 48 tests during the focused
+map/corruption check. A sample `frontier` run generated an interactive map with
+73 frames: five checkpoints and 27 choice/change frames.
 
 ### 2026-06-03 — Isekai kingdom recurring systems expanded (GPT-5 via Codex)
 
