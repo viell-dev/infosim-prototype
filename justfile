@@ -92,6 +92,27 @@ map path="" scenario="" out="" max_frames="80" max_stats="12":
     html_path="${output#Wrote }"
     echo "HTML:  $(realpath "$html_path")"
 
+# Start the on-demand browser visualizer. Defaults to the latest runs/*.jsonl file.
+visualize path="" scenario="" host="127.0.0.1" port="8765":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    jsonl_path="{{path}}"
+    if [ -z "$jsonl_path" ]; then
+        jsonl_path=$(find runs -maxdepth 1 -type f -name '*.jsonl' -printf '%T@ %p\n' \
+            | sort -nr \
+            | head -n 1 \
+            | cut -d' ' -f2-)
+        if [ -z "$jsonl_path" ]; then
+            echo "No JSONL run files found under runs/" >&2
+            exit 2
+        fi
+    fi
+    args=()
+    if [ -n "{{scenario}}" ]; then
+        args+=(--scenario "{{scenario}}")
+    fi
+    python3 tools/visualizer.py "$jsonl_path" --host "{{host}}" --port "{{port}}" "${args[@]}"
+
 # Inspect a run JSONL file. Optional filters mirror tools/inspect_run.py.
 inspect path actor="" region="" kind="" subject="" from_time="" to_time="":
     #!/usr/bin/env bash

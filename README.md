@@ -68,6 +68,12 @@ just isekai-kingdom
 just inspect-kind runs/frontier-seed1-20260602-220543.jsonl dispatch
 just inspect-region runs/frontier-seed1-20260602-220543.jsonl Frontier
 
+# start the on-demand browser visualizer for the latest run
+just visualize
+
+# or visualize a specific run
+just visualize runs/isekai_kingdom-seed1-20260603-120000.jsonl
+
 # generate a plain HTML debug map for the latest run
 just map
 
@@ -90,6 +96,12 @@ JSONL path to map a specific run. The replay browser caps generated frames at
 80 and displayed stats at 12 by default so large `isekai_kingdom` runs do not
 exhaust memory; pass the fourth and fifth `just map` arguments to raise the
 caps, or `0` for an uncapped debug build.
+
+For ordinary inspection, especially large `isekai_kingdom` runs, use
+`just visualize`. It starts a local browser app at `http://127.0.0.1:8765/`
+and treats the JSONL file as the backing store: the server indexes event times,
+then the browser requests only the current state frame and a small event window
+as you move through the run.
 
 ---
 
@@ -119,9 +131,9 @@ caps, or `0` for an uncapped debug build.
 - `src/infosim/scenarios/` wires concrete worlds, actors, and a `RULESET`;
   `tools/` contains
   analysis helpers. `tools/inspect_run.py` filters raw JSONL events, and
-  `tools/map_run.py` replays a run into a plain HTML browser with event,
-  choice/change, and checkpoint navigation. `tests/` mirrors the
-  purpose-specific behavior under test.
+  `tools/visualizer.py` serves the on-demand JSONL-backed browser visualizer.
+  `tools/map_run.py` remains a bounded static HTML export for small/debug
+  snapshots. `tests/` mirrors the purpose-specific behavior under test.
 
 ---
 
@@ -307,6 +319,18 @@ the generated path. The `just map` recipe exposes the frame and stat caps as
 its fourth and fifth arguments. Validation: `just check` passes 49 tests; a
 400-tick `isekai_kingdom` seed 1 sample selected 80 of 85,605 candidate times
 and wrote a ~30 MB HTML file in a few seconds.
+
+Second follow-up: the capped static export is still the wrong primary UX for
+large runs because every selected frame must be serialized into one HTML file.
+Added `tools/visualizer.py` and `just visualize`, a local stdlib HTTP app that
+keeps the JSONL on disk, builds a lightweight event-time index, replays state
+on demand with sparse server-side replay caches, and returns only the requested
+state frame plus a sliding event window. The frontend is a small browser app
+with the same event/choice/checkpoint controls, time slider, window size, and
+stat cap, but the payload is per request instead of all-at-once. Validation
+against the 400-tick `isekai_kingdom` seed 1 sample: `/api/meta`, `/api/frame`
+at `t=200`, `/api/seek`, and the app shell all returned quickly after indexing
+397,635 events.
 
 ### 2026-06-03 — Isekai kingdom recurring systems expanded (GPT-5 via Codex)
 
