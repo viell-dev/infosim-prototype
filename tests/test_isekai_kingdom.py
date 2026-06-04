@@ -51,6 +51,15 @@ def test_kingdom_generation_honors_map_and_ownership_constraints() -> None:
     assert all(actor.title != "Crown Steward" for actor in setup.actors.values())
     assert setup.actors[_mayor_id(CAPITAL)].commander == "king"
     assert setup.actors[_mayor_id(setup.king_second_region)].commander == "king"
+    assert all(
+        not actor.display_name.startswith(actor.title)
+        for actor in setup.actors.values()
+    )
+    assert all(
+        not actor.display_name.startswith(("Mayor ", "Caretaker ", "Guard Captain "))
+        for actor in setup.actors.values()
+        if actor.title in {"Mayor", "Guard Captain"}
+    )
 
     eligible = [
         region for region in setup.regions.values()
@@ -103,6 +112,10 @@ def test_kingdom_run_emits_setup_economy_politics_and_shocks(tmp_path) -> None:
     assert any(
         ev["kind"] == "true_state_change"
         and ev.get("cause") in {"coastal granary fire", "mine tunnel breach"}
+        for ev in events
+    )
+    assert not any(
+        "Mayor Mayor" in str(ev) or "Guard Captain Guard Captain" in str(ev)
         for ev in events
     )
     assert not any(

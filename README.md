@@ -332,6 +332,15 @@ against the 400-tick `isekai_kingdom` seed 1 sample: `/api/meta`, `/api/frame`
 at `t=200`, `/api/seek`, and the app shell all returned quickly after indexing
 397,635 events.
 
+Third follow-up: fixed duplicated local-office titles in isekai logs. The
+scenario had been putting office words into `Actor.display_name` for local
+offices (`Mayor Quell of A1`, `Guard Captain Pike`) while generic logs already
+print `{title} {display_name}`, producing lines such as `Mayor Mayor ...` and
+`Guard Captain Guard Captain ...`. Mayor and guard display names are now
+title-free, and generated successors also use plain names. Validation:
+`just check` passes all 50 tests, and a 20-tick `isekai_kingdom` seed 1 sample
+emitted no duplicated local-office titles.
+
 ### 2026-06-03 — Isekai kingdom recurring systems expanded (GPT-5 via Codex)
 
 Expanded the kingdom from setup-plus-generic-policy into a recurring scenario

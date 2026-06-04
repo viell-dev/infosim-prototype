@@ -595,7 +595,7 @@ def _build_actors(
             guard_prejudice, guard_preference = _local_affinity_maps(rng, guard_identity, region)
             add(Actor(
                 id=_guard_id(region.coord),
-                display_name=f"Guard Captain {_surname(rng)}",
+                display_name=_surname(rng),
                 title="Guard Captain",
                 location=region.coord,
                 commander=mayor_id,
@@ -2154,16 +2154,9 @@ def _generated_successor_candidate(sim: Simulation, office: Actor) -> Candidate:
         fear=max(0.05, min(0.90, base.fear + sim.rng.uniform(-0.14, 0.14))),
         education=max(0.20, min(0.95, base.education + sim.rng.uniform(-0.16, 0.16))),
     )
-    title_word = {
-        "King": "Heir",
-        "Royal Noble": "Heir",
-        "Noble": "Heir",
-        "Mayor": "Deputy",
-        "Guard Captain": "Lieutenant",
-    }.get(office.title, "Successor")
     return Candidate(
         id=f"generated_{office.id}_{int(sim.now)}",
-        display_name=f"{title_word} {_surname(sim.rng)}",
+        display_name=f"{_surname(sim.rng)} of {office.location}",
         traits=traits,
         identity=identity,
         prejudice=prejudice,
@@ -2548,9 +2541,8 @@ def _guard_id(coord: str) -> str:
     return f"guard_{coord.lower()}"
 
 
-def _mayor_name(rng: random.Random, coord: str, developed: bool) -> str:
-    title = "Mayor" if developed else "Caretaker"
-    return f"{title} {_surname(rng)} of {coord}"
+def _mayor_name(rng: random.Random, coord: str, _developed: bool) -> str:
+    return f"{_surname(rng)} of {coord}"
 
 
 def _surname(rng: random.Random) -> str:
