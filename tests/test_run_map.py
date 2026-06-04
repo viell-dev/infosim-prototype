@@ -49,6 +49,29 @@ def test_map_run_renders_checkpoints_and_replacement_lineage(tmp_path) -> None:
     assert "Mira of Halen" in html and "Iselle Marn" in html
 
 
+def test_map_run_caps_dense_replay_frames() -> None:
+    events = [
+        {"time": float(i), "kind": "custom_event", "actor": "king"}
+        for i in range(100)
+    ]
+
+    frames = build_frames(events, "frontier", max_frames=10)
+
+    assert len(frames) <= 10
+    assert [frame.label for frame in frames if frame.is_checkpoint] == [
+        "Start",
+        "25%",
+        "50%",
+        "75%",
+        "End",
+    ]
+    assert any(
+        event["kind"] == "custom_event"
+        for frame in frames
+        for event in frame.events
+    )
+
+
 def test_map_run_renders_vacant_offices_after_candidate_pool_exhaustion(tmp_path) -> None:
     base = run(seed=1, ticks=200, runs_dir=tmp_path)
     jsonl_path = base.with_suffix(".jsonl")

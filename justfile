@@ -64,7 +64,8 @@ isekai-kingdom seed="1" ticks="400" runs_dir="runs":
     @just run isekai_kingdom "{{seed}}" "{{ticks}}" "{{runs_dir}}"
 
 # Generate a plain HTML debug map. Defaults to the latest runs/*.jsonl file.
-map path="" scenario="" out="":
+# max_frames=0 or max_stats=0 disables the corresponding cap.
+map path="" scenario="" out="" max_frames="80" max_stats="12":
     #!/usr/bin/env bash
     set -euo pipefail
     jsonl_path="{{path}}"
@@ -85,6 +86,8 @@ map path="" scenario="" out="":
     if [ -n "{{out}}" ]; then
         args+=(--out "{{out}}")
     fi
+    args+=(--max-frames "{{max_frames}}")
+    args+=(--max-stats "{{max_stats}}")
     output=$(python3 tools/map_run.py "$jsonl_path" "${args[@]}")
     html_path="${output#Wrote }"
     echo "HTML:  $(realpath "$html_path")"

@@ -74,6 +74,9 @@ just map
 # or map a specific run
 just map runs/frontier-seed1-20260602-220543.jsonl
 
+# map with larger frame/stat budgets; 0 means unlimited for that budget
+just map runs/isekai_kingdom-seed1-20260603-120000.jsonl "" "" 500 32
+
 # aggregate experiments
 just sweep 100 300
 just stress 50 300
@@ -83,7 +86,10 @@ Outputs land in `runs/<scenario>-seed<N>-<timestamp>.{jsonl,log}`.
 `just run`, `just frontier`, `just deep-chain`, `just space-miner`, and `just isekai-kingdom`
 print the generated JSONL and log filenames as full paths. `just map` writes a sibling `*-map.html` file
 for the latest `runs/*.jsonl` by default and prints the full HTML path. Pass a
-JSONL path to map a specific run.
+JSONL path to map a specific run. The replay browser caps generated frames at
+80 and displayed stats at 12 by default so large `isekai_kingdom` runs do not
+exhaust memory; pass the fourth and fifth `just map` arguments to raise the
+caps, or `0` for an uncapped debug build.
 
 ---
 
@@ -289,6 +295,18 @@ offices, mobile commanders, and skim event structure.
 Validation: `python3 tests/_runner.py` passed all 48 tests during the focused
 map/corruption check. A sample `frontier` run generated an interactive map with
 73 frames: five checkpoints and 27 choice/change frames.
+
+Follow-up: large `isekai_kingdom` runs exposed that storing a full state snapshot
+for every non-observation event time can produce enormous HTML payloads and
+exhaust memory. `tools/map_run.py` now caps replay frames before state snapshots
+are copied (default 80, `--max-frames 0` for uncapped), preserves checkpoints,
+samples choice/change times first, prunes displayed stats by frequency (default
+12, `--max-stats 0` for uncapped), and reports read/planning/replay/render/write
+progress to stderr so `just map` remains observable while stdout still carries
+the generated path. The `just map` recipe exposes the frame and stat caps as
+its fourth and fifth arguments. Validation: `just check` passes 49 tests; a
+400-tick `isekai_kingdom` seed 1 sample selected 80 of 85,605 candidate times
+and wrote a ~30 MB HTML file in a few seconds.
 
 ### 2026-06-03 — Isekai kingdom recurring systems expanded (GPT-5 via Codex)
 

@@ -12,6 +12,7 @@ import html
 import json
 import re
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -101,6 +102,50 @@ CHOICE_EVENT_KINDS = {
     "skim",
     "tax_forgiven",
 }
+
+DEFAULT_MAX_FRAMES = 80
+DEFAULT_MAX_STATS = 12
+
+
+class Progress:
+    def __init__(self, enabled: bool = True) -> None:
+        self.enabled = enabled
+        self._last_update = 0.0
+        self._last_text = ""
+
+    def message(self, text: str) -> None:
+        if not self.enabled:
+            return
+        print(text, file=sys.stderr)
+
+    def update(self, label: str, current: int, total: int | None = None) -> None:
+        if not self.enabled:
+            return
+        now = time.monotonic()
+        if now - self._last_update < 0.25 and current != total:
+            return
+        self._last_update = now
+        if total:
+            pct = min(100.0, (current / total) * 100.0)
+            text = f"{label}: {current}/{total} ({pct:5.1f}%)"
+        else:
+            text = f"{label}: {current}"
+        print(f"\r{text}", end="", file=sys.stderr, flush=True)
+        self._last_text = text
+
+    def done(self, label: str, current: int, total: int | None = None) -> None:
+        if not self.enabled:
+            return
+        if total:
+            pct = min(100.0, (current / total) * 100.0)
+            text = f"{label}: {current}/{total} ({pct:5.1f}%)"
+        else:
+            text = f"{label}: {current}"
+        if text != self._last_text:
+            print(f"\r{text}", end="", file=sys.stderr, flush=True)
+        print(file=sys.stderr)
+        self._last_update = 0.0
+        self._last_text = ""
 
 
 def _scenario_build(name: str, seed: int | None = None) -> tuple[Any, dict[str, Actor]]:
@@ -196,9 +241,18 @@ def _copy_state(state: ReplayState) -> ReplayState:
     )
 
 
-def _read_events(path: Path) -> list[dict[str, Any]]:
+def _read_events(path: Path, progress: Progress | None = None) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
     with path.open(encoding="utf-8") as fp:
-        return [json.loads(line) for line in fp if line.strip()]
+        for line in fp:
+            if not line.strip():
+                continue
+            events.append(json.loads(line))
+            if progress is not None:
+                progress.update("Reading events", len(events))
+    if progress is not None:
+        progress.done("Reading events", len(events))
+    return events
 
 
 def _subject_stat(subject: str) -> str:
@@ -578,6 +632,49 @@ def _has_choice_event(events: list[dict[str, Any]]) -> bool:
     return any(str(ev.get("kind")) in CHOICE_EVENT_KINDS for ev in events)
 
 
+def _sample_evenly(times: list[float], limit: int) -> set[float]:
+    if limit <= 0 or not times:
+        return set()
+    if len(times) <= limit:
+        return set(times)
+    if limit == 1:
+        return {times[len(times) // 2]}
+    indexes = {
+        round(i * (len(times) - 1) / (limit - 1))
+        for i in range(limit)
+    }
+    return {times[index] for index in indexes}
+
+
+def _select_target_times(
+    checkpoint_times: set[float],
+    event_times: set[float],
+    choice_times: set[float],
+    max_frames: int,
+) -> list[float]:
+    all_targets = sorted(checkpoint_times | event_times)
+    if max_frames <= 0 or len(all_targets) <= max_frames:
+        return all_targets
+
+    selected = set(checkpoint_times)
+    remaining = max(0, max_frames - len(selected))
+
+    choice_candidates = sorted(choice_times - selected)
+    choice_budget = min(len(choice_candidates), max(0, round(remaining * 0.7)))
+    selected.update(_sample_evenly(choice_candidates, choice_budget))
+    remaining = max(0, max_frames - len(selected))
+
+    event_candidates = sorted(event_times - selected)
+    selected.update(_sample_evenly(event_candidates, remaining))
+
+    # If duplicate checkpoint times made room unexpectedly, top up from all
+    # remaining event targets so the cap is used as fully as possible.
+    remaining = max(0, max_frames - len(selected))
+    if remaining:
+        selected.update(_sample_evenly(sorted((event_times | choice_times) - selected), remaining))
+    return sorted(selected)
+
+
 def _event_summaries(events: list[dict[str, Any]], state: ReplayState) -> list[dict[str, str]]:
     summaries: list[dict[str, str]] = []
     observation_count = sum(1 for ev in events if ev.get("kind") == "observation")
@@ -608,27 +705,47 @@ def build_frames(
     events: list[dict[str, Any]],
     scenario: str,
     seed: int | None = None,
+    max_frames: int = DEFAULT_MAX_FRAMES,
+    progress: Progress | None = None,
 ) -> list[ReplayFrame]:
     end_time = max((_event_time(ev) for ev in events), default=0.0)
     checkpoint_targets = {
         end_time * fraction: label
         for label, fraction in CHECKPOINTS
     }
+    checkpoint_times = set(checkpoint_targets)
     visible_times = {
         _event_time(ev)
         for ev in events
         if str(ev.get("kind")) != "observation"
     }
-    target_times = sorted(set(visible_times) | set(checkpoint_targets.keys()))
+    choice_times = {
+        _event_time(ev)
+        for ev in events
+        if str(ev.get("kind")) in CHOICE_EVENT_KINDS
+    }
+    uncapped_count = len(visible_times | checkpoint_times)
+    target_times = _select_target_times(
+        checkpoint_times,
+        visible_times,
+        choice_times,
+        max_frames=max_frames,
+    )
     if not target_times:
         target_times = [0.0]
+    if progress is not None:
+        cap_label = "unlimited" if max_frames <= 0 else str(max_frames)
+        progress.message(
+            f"Planning frames: selected {len(target_times)} of {uncapped_count} "
+            f"candidate times (cap {cap_label})",
+        )
 
     state = _initial_state(scenario, seed=seed)
     frames: list[ReplayFrame] = []
     event_index = 0
     n_events = len(events)
 
-    for target in target_times:
+    for target_index, target in enumerate(target_times, start=1):
         events_at_time: list[dict[str, Any]] = []
         while event_index < n_events and _event_time(events[event_index]) <= target:
             ev = events[event_index]
@@ -650,6 +767,8 @@ def build_frames(
             is_checkpoint=is_checkpoint,
             is_choice=_has_choice_event(events_at_time),
         ))
+        if progress is not None:
+            progress.update("Replaying frames", target_index, len(target_times))
 
     if not any(frame.is_checkpoint for frame in frames):
         frames.insert(0, ReplayFrame(
@@ -663,6 +782,8 @@ def build_frames(
             is_checkpoint=True,
             is_choice=False,
         ))
+    if progress is not None:
+        progress.done("Replaying frames", len(target_times), len(target_times))
     return frames
 
 
@@ -682,15 +803,47 @@ def _stats_in_state(state: ReplayState) -> list[str]:
     return sorted(stats)
 
 
-def _frame_payload(frame: ReplayFrame) -> dict[str, Any]:
+def _select_stats_for_frames(frames: list[ReplayFrame], max_stats: int) -> list[str]:
+    counts: dict[str, int] = {}
+    for frame in frames:
+        for actor in frame.state.actors.values():
+            for stat in actor.stats:
+                counts[stat] = counts.get(stat, 0) + 1
+    stats = sorted(counts, key=lambda stat: (-counts[stat], stat))
+    if max_stats > 0:
+        stats = stats[:max_stats]
+    return sorted(stats)
+
+
+def _frame_payload(frame: ReplayFrame, stats_schema: list[str]) -> dict[str, Any]:
     state = frame.state
+    selected_stats = set(stats_schema)
+    roots = [
+        actor
+        for actor in state.actors.values()
+        if actor.active and actor.commander is None
+    ]
+    apex_id = "king" if "king" in state.actors else "ceo" if "ceo" in state.actors else None
+    if apex_id is None and roots:
+        apex_id = sorted(roots, key=_actor_sort_key)[0].id
+
+    def displayed_known(actor: ActorState) -> dict[str, Belief]:
+        if actor.id == apex_id:
+            return actor.known
+        subjects = {f"{actor.id}.{stat}" for stat in stats_schema}
+        return {
+            subject: belief
+            for subject, belief in actor.known.items()
+            if subject in subjects
+        }
+
     return {
         "label": frame.label,
         "time": frame.time,
         "isCheckpoint": frame.is_checkpoint,
         "isChoice": frame.is_choice,
         "events": frame.events,
-        "statsSchema": _stats_in_state(state),
+        "statsSchema": stats_schema,
         "actors": [
             {
                 "id": actor.id,
@@ -698,7 +851,11 @@ def _frame_payload(frame: ReplayFrame) -> dict[str, Any]:
                 "title": actor.title,
                 "location": actor.location,
                 "commander": actor.commander,
-                "stats": actor.stats,
+                "stats": {
+                    stat: value
+                    for stat, value in actor.stats.items()
+                    if stat in selected_stats
+                },
                 "known": {
                     subject: {
                         "value": belief.value,
@@ -706,7 +863,7 @@ def _frame_payload(frame: ReplayFrame) -> dict[str, Any]:
                         "updatedAt": belief.updated_at,
                         "sourceChain": belief.source_chain,
                     }
-                    for subject, belief in actor.known.items()
+                    for subject, belief in displayed_known(actor).items()
                 },
                 "active": actor.active,
                 "vacant": actor.vacant,
@@ -736,14 +893,19 @@ def _frames_from_checkpoints(checkpoints: list[Checkpoint]) -> list[ReplayFrame]
     ]
 
 
-def render_html(replay: list[Checkpoint] | list[ReplayFrame], source_path: Path) -> str:
+def render_html(
+    replay: list[Checkpoint] | list[ReplayFrame],
+    source_path: Path,
+    max_stats: int = DEFAULT_MAX_STATS,
+) -> str:
     if replay and isinstance(replay[0], ReplayFrame):
         frames = replay
     else:
         frames = _frames_from_checkpoints(replay)  # type: ignore[arg-type]
+    stats_schema = _select_stats_for_frames(frames, max_stats=max_stats)
     payload = {
         "source": str(source_path),
-        "frames": [_frame_payload(frame) for frame in frames],
+        "frames": [_frame_payload(frame, stats_schema) for frame in frames],
     }
     data_json = json.dumps(payload, separators=(",", ":")).replace("</", "<\\/")
 
@@ -1100,16 +1262,44 @@ def main() -> None:
         ),
     )
     parser.add_argument("--out", type=Path)
+    parser.add_argument(
+        "--max-frames",
+        type=int,
+        default=DEFAULT_MAX_FRAMES,
+        help="maximum replay frames to write; 0 means unlimited",
+    )
+    parser.add_argument(
+        "--max-stats",
+        type=int,
+        default=DEFAULT_MAX_STATS,
+        help="maximum stat columns/rows to include; 0 means unlimited",
+    )
+    parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="suppress stderr progress output",
+    )
     args = parser.parse_args()
 
     if not args.path.exists():
         raise SystemExit(f"no such file: {args.path}")
+    progress = Progress(enabled=not args.no_progress)
     scenario = args.scenario or _infer_scenario(args.path)
     seed = _infer_seed(args.path)
-    events = _read_events(args.path)
-    frames = build_frames(events, scenario, seed=seed)
+    progress.message(f"Scenario: {scenario} seed={seed if seed is not None else 'unknown'}")
+    events = _read_events(args.path, progress=progress)
+    frames = build_frames(
+        events,
+        scenario,
+        seed=seed,
+        max_frames=args.max_frames,
+        progress=progress,
+    )
     output_path = args.out or args.path.with_name(f"{args.path.stem}-map.html")
-    output_path.write_text(render_html(frames, args.path), encoding="utf-8")
+    progress.message("Rendering HTML")
+    html_text = render_html(frames, args.path, max_stats=args.max_stats)
+    progress.message(f"Writing {output_path}")
+    output_path.write_text(html_text, encoding="utf-8")
     print(f"Wrote {output_path}")
 
 
